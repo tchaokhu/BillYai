@@ -1,0 +1,30 @@
+# Local Postgres for the integration tests.
+#
+# The repository layer must be tested against a real database. A mock cannot
+# tell you whether a check constraint fires or whether a cascade actually
+# deletes, and those are the things the tests exist to prove.
+#
+#   docker compose up -d
+#   npm run db:reset
+#   npm run test:db
+#
+# This is not a Supabase stand-in — there is no PostgREST, no GoTrue, no
+# storage schema. It does not need to be one: D15 dropped RLS, so every query
+# in this project runs as a plain server-side connection (D24).
+
+services:
+  db:
+    image: postgres:17-alpine
+    container_name: billyai-db
+    environment:
+      POSTGRES_USER: billyai
+      POSTGRES_PASSWORD: billyai
+      POSTGRES_DB: billyai
+    ports:
+      # Deliberately odd, and deliberately not 54329 — that one belongs to sala.
+      - '54331:5432'
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U billyai -d billyai']
+      interval: 3s
+      timeout: 3s
+      retries: 20

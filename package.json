@@ -6,11 +6,18 @@
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:db": "vitest run --config vitest.db.config.ts",
+    "test:all": "npm test && npm run test:db",
+    "db:reset": "node scripts/db-reset.mjs"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
+    "@types/pg": "^8.23.1",
     "typescript": "^5.7.0",
     "vitest": "^3.2.4"
+  },
+  "dependencies": {
+    "pg": "^8.23.0"
   }
 }
