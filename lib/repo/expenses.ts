@@ -332,7 +332,11 @@ export async function commitExpense(
   tx?: PoolClient,
 ): Promise<Expense> {
   assertInput(input)
-  if (tx === undefined) return withTransaction(client => writeExpense(client, input))
+  // `null` นับเป็น "ไม่ได้ส่งมา" — เป็นค่าที่ route/webhook ที่ไม่ได้ผ่าน tsc
+  // ส่งมาได้ง่ายที่สุด และการโยน TypeError ใส่มันไม่ได้ปลอดภัยขึ้นเลย
+  if (tx === undefined || tx === null) {
+    return withTransaction(client => writeExpense(client, input))
+  }
 
   // ด่านตอนรันจริง เพราะ type ช่วยได้เฉพาะผู้เรียกที่คอมไพล์ผ่าน tsc — ทาง LIFF
   // route หรือ webhook ที่ cast มาจะหลุดด่านนั้นไปทั้งดุ้น

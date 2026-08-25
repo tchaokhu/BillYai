@@ -672,6 +672,18 @@ describe('commitExpense กับ transaction', () => {
     expect(await countExpenses(group.id)).toBe(0)
   })
 
+  it('ส่ง null มาแทน client → เปิด transaction เอง ไม่ใช่ TypeError', async () => {
+    const group = await makeGroup()
+    const [payer, other] = await makeTrio(group.id)
+
+    const expense = await commitExpense(
+      validInput(group.id, payer, other),
+      null as unknown as PoolClient,
+    )
+    expect(await countExpenses(group.id)).toBe(1)
+    expect(await countShares(expense.id)).toBe(2)
+  })
+
   it('ผู้เรียก commit transaction เอง → บิลอยู่ครบ', async () => {
     const group = await makeGroup()
     const [payer, other] = await makeTrio(group.id)
