@@ -191,7 +191,7 @@ vitest รันหลายไฟล์ขนานกัน ตัวที่
   ไม่ตรง → throw + rollback. **ตรวจซ้ำแม้ `split.ts` ตรวจแล้ว** เพราะ shares
   อาจมาจาก LLM หรือ LIFF ที่ไม่ได้ผ่าน `splitExpense`
 - rollback จริง: เทสต์ที่ยิง commit ที่พังกลางคัน ต้องไม่เหลือ `expense` แถวลอย
-- void = `status='voided'` + `voided_at` + `voided_by` ไม่ลบแถว; บิลที่ void แล้ว
+- void = `status='voided'` + `voided_at` ไม่ลบแถว (ไม่มี `voided_by` — ดูหมายเหตุใน schema); บิลที่ void แล้ว
   void ซ้ำต้อง error
 - `on delete cascade` จาก `expense` → `expense_share`/`expense_item` ต้องทำงานจริง
 - list บิลของวงเรียง `spent_at desc` deterministic เมื่อวันซ้ำ (tie-break ด้วย

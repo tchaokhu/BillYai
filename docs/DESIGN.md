@@ -163,7 +163,8 @@ create table expense (
   source           text not null,                  -- rule | llm | liff | web
   status           text not null default 'active', -- active | voided
   voided_at        timestamptz,
-  voided_by        uuid references member(id),
+  -- ไม่มี voided_by: FK ชี้ member(id) การันตีแค่ว่ามีตัวตน ไม่ได้การันตีว่าอยู่วงเดียวกับบิล
+  -- audit ของ D11 คือข้อความที่บอทประกาศกลับเข้ากลุ่มตอนยกเลิก ไม่ใช่คอลัมน์นี้
   created_at       timestamptz not null default now()
 );
 create index on expense (group_id, status, spent_at desc);

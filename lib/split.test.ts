@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { splitExpense } from './split.js'
+import { addSurcharge, splitExpense } from './split.js'
 import type { Item, SplitInput, SplitMode } from './types.js'
 
 /** อินพุตพื้นฐาน — เทสต์แต่ละตัวทับเฉพาะ field ที่สนใจ */
@@ -149,6 +149,33 @@ describe('splitExpense — surcharge', () => {
     expect(() => splitExpense(input({ surchargePct: -1 }))).toThrow()
     expect(() => splitExpense(input({ surchargePct: NaN }))).toThrow()
     expect(() => splitExpense(input({ surchargePct: Infinity }))).toThrow()
+  })
+
+  /**
+   * ด่านตรวจต้องอยู่ติดกับสูตร ไม่ใช่ที่ชั้น persistence อย่างเดียว
+   *
+   * `addSurcharge` เป็นสูตรร่วมของทั้งระบบแล้ว แต่ถ้าปล่อยให้ค่าที่ DB เก็บไม่ได้
+   * ผ่านมาถึงตรงนี้ ผู้ใช้จะเห็นผลหารที่ดูสมบูรณ์บนจอ แล้วบิลไปตายตอนกดบันทึก
+   * ซึ่งเป็นจังหวะที่แก้อะไรไม่ได้แล้ว
+   */
+  it('surchargePct เกิน 100 → error', () => {
+    expect(() => addSurcharge(10000, 100.01)).toThrow()
+    expect(() => addSurcharge(10000, 101)).toThrow()
+    expect(() => splitExpense(input({ surchargePct: 120 }))).toThrow()
+  })
+
+  it('surchargePct ทศนิยมเกิน 2 ตำแหน่ง → error', () => {
+    // `surcharge_pct numeric(5,2)` ปัด 17.005 เป็น 17.01 เงียบๆ ตอน insert
+    expect(() => addSurcharge(10000, 17.005)).toThrow()
+    // VAT 7 + service 10.5 บวกกันแบบ float ได้ค่านี้มาเอง ไม่ต้องมีใครพิมพ์
+    expect(() => addSurcharge(10000, 17.500000000000002)).toThrow()
+    expect(() => splitExpense(input({ surchargePct: 17.005 }))).toThrow()
+  })
+
+  it('ค่าที่ขอบพอดียังผ่าน — ด่านต้องไม่แน่นเกินไป', () => {
+    expect(addSurcharge(10000, 100)).toBe(20000)
+    expect(addSurcharge(10000, 17.25)).toBe(11725)
+    expect(addSurcharge(10000, 0)).toBe(10000)
   })
 })
 

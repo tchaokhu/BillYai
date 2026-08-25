@@ -191,15 +191,10 @@ export async function makeExpense(
 }
 
 /** มาร์กบิลว่ายกเลิก โดยไม่ผ่าน repository */
-export async function voidExpense(
-  expenseId: string,
-  voidedBy: MemberId,
-  tx?: Queryable,
-): Promise<void> {
+export async function voidExpense(expenseId: string, tx?: Queryable): Promise<void> {
   await db(tx).query(
-    `update expense set status = 'voided', voided_at = now(), voided_by = $2
-     where id = $1`,
-    [expenseId, voidedBy],
+    `update expense set status = 'voided', voided_at = now() where id = $1`,
+    [expenseId],
   )
 }
 

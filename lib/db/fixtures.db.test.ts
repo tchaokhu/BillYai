@@ -166,14 +166,14 @@ describe('บิล', () => {
       totalSatang: 100,
       shares: [{ memberId: payer.id, amountSatang: 100 }],
     })
-    await voidExpense(expense.id, payer.id)
+    await voidExpense(expense.id)
 
-    const { rows } = await getPool().query<{ status: string; voided_by: string }>(
-      `select status, voided_by from expense where id = $1`,
+    const { rows } = await getPool().query<{ status: string; voided_at: Date | null }>(
+      `select status, voided_at from expense where id = $1`,
       [expense.id],
     )
     expect(rows[0]?.status).toBe('voided')
-    expect(rows[0]?.voided_by).toBe(payer.id)
+    expect(rows[0]?.voided_at).toBeInstanceOf(Date)
   })
 })
 

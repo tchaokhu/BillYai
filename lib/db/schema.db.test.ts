@@ -94,8 +94,10 @@ const COLUMNS: Record<string, readonly ColumnSpec[]> = {
     ['surcharge_pct', 'numeric', false],
     // เงินเป็น bigint สตางค์ ไม่ใช่ numeric ไม่ใช่ integer
     ['total_satang', 'bigint', false],
+    // ไม่มี `voided_by` — ตรวจว่าคนยกเลิกอยู่วงเดียวกับบิลไม่ได้จาก FK ของ
+    // `member(id)` (มันการันตีแค่ว่ามีตัวตน) และ audit ตาม D11 คือข้อความที่บอท
+    // ประกาศกลับเข้ากลุ่มตอนยกเลิก ไม่ใช่คอลัมน์นี้
     ['voided_at', 'timestamp with time zone', true],
-    ['voided_by', 'uuid', true],
   ],
   expense_share: [
     ['amount_satang', 'bigint', false],

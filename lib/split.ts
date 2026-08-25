@@ -7,17 +7,36 @@ import { distribute } from './money.js'
 import type { Item, MemberId, Participant, Share, SplitInput } from './types.js'
 
 /**
+ * ขอบเขตของ `surchargePct` — ตรงกับคอลัมน์ `surcharge_pct numeric(5,2)`
+ * และ check constraint `surcharge_pct >= 0 and <= 100`
+ *
+ * ด่านนี้อยู่ที่นี่ ไม่ใช่ที่ชั้น persistence อย่างเดียว เพราะ `addSurcharge` คือ
+ * สูตรร่วมของทั้งระบบ ถ้าค่าที่ DB เก็บไม่ได้ผ่านมาถึงการคำนวณ ผู้ใช้จะเห็น
+ * ผลหารที่ดูสมบูรณ์บนจอก่อน แล้วบิลค่อยไปตายตอนกดบันทึก ซึ่งสายเกินจะแก้แล้ว
+ */
+const MAX_PCT = 100
+const MAX_PCT_DECIMALS = 2
+
+/**
  * จำนวนทศนิยมของเปอร์เซ็นต์ — อ่านจากสตริงด้วยเหตุผลเดียวกับ `weightDecimals`
  * ใน money.ts: เป็นวิธีเดียวที่บอกได้ว่า float ตัวนั้น "แทน" ทศนิยมกี่ตำแหน่งจริงๆ
  */
 function pctDecimals(pct: number): number {
   if (!Number.isFinite(pct)) throw new Error(`surchargePct ไม่ถูกต้อง: ${pct}`)
   if (pct < 0) throw new Error(`surchargePct ติดลบไม่ได้: ${pct}`)
+  if (pct > MAX_PCT) throw new Error(`surchargePct เกิน ${MAX_PCT} ไม่ได้: ${pct}`)
   const text = String(pct)
   if (text.includes('e') || text.includes('E')) {
     throw new Error(`surchargePct อยู่นอกช่วงที่รองรับ: ${pct}`)
   }
-  return (text.split('.')[1] ?? '').length
+  const decimals = (text.split('.')[1] ?? '').length
+  // VAT 7 + service charge 10.5 บวกกันเป็น float ได้ 17.500000000000002 มาเอง
+  // โดยไม่มีใครพิมพ์ — numeric(5,2) จะปัดทิ้งเงียบๆ แล้ว Σ share ที่เขียนลงไป
+  // จะไม่ตรงกับยอดที่คำนวณใหม่จากแถวที่อ่านกลับมา
+  if (decimals > MAX_PCT_DECIMALS) {
+    throw new Error(`surchargePct มีทศนิยมได้ไม่เกิน ${MAX_PCT_DECIMALS} ตำแหน่ง: ${pct}`)
+  }
+  return decimals
 }
 
 /** ขยายเปอร์เซ็นต์เป็น integer เพื่อคำนวณด้วย BigInt ล้วน */
@@ -33,8 +52,13 @@ function scalePct(pct: number, decimals: number): bigint {
  * `total × pct / 100` แบบ float สะสม error จนเคสครึ่งพอดีปัดผิดทาง
  *
  * ปัดครึ่งขึ้น = floor((2n + d) / 2d) เมื่อ n/d คือค่าจริง
+ *
+ * export ออกมาเพราะชั้น persistence ต้องตรวจ invariant
+ * `Σ share = total + surcharge` ซ้ำอีกชั้นก่อนเขียนลง DB (shares อาจมาจาก LLM
+ * หรือ LIFF ที่ไม่ได้ผ่าน `splitExpense`) — ถ้าที่นั่นเขียนสูตรเอง จะมีสองสูตร
+ * ที่ต้องปัดตรงกันตลอดไป ซึ่งคือบั๊กที่รอเกิด
  */
-function addSurcharge(totalSatang: number, surchargePct: number): number {
+export function addSurcharge(totalSatang: number, surchargePct: number): number {
   const decimals = pctDecimals(surchargePct)
   const scale = 10n ** BigInt(decimals)
   const pct = scalePct(surchargePct, decimals)

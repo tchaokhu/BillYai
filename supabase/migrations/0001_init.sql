@@ -97,8 +97,10 @@ create table expense (
   created_by       uuid not null references member(id),   -- a member, not a line_user_id (D22)
   source           text not null,
   status           text not null default 'active',
+  -- ไม่มี `voided_by`: FK ของ member(id) การันตีแค่ว่าสมาชิกมีตัวตน ไม่ได้
+  -- การันตีว่าอยู่วงเดียวกับบิล คอลัมน์นี้จึงชี้ข้ามวงได้โดยไม่มีใครกัน
+  -- audit ตาม D11 คือข้อความที่บอทประกาศกลับเข้ากลุ่มตอนยกเลิก ซึ่งทำงานอยู่แล้ว
   voided_at        timestamptz,
-  voided_by        uuid references member(id),
   created_at       timestamptz not null default now(),
   constraint expense_surcharge_pct_check
     check (surcharge_pct >= 0 and surcharge_pct <= 100),

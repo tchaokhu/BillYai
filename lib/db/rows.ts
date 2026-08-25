@@ -188,7 +188,6 @@ export type ExpenseRow = {
   source: ExpenseSource
   status: ExpenseStatus
   voided_at: Date | null
-  voided_by: string | null
   created_at: Date
 }
 
@@ -208,7 +207,6 @@ export interface Expense {
   source: ExpenseSource
   status: ExpenseStatus
   voidedAt: Date | null
-  voidedBy: MemberId | null
   createdAt: Date
 }
 
@@ -227,7 +225,6 @@ export function toExpense(row: ExpenseRow): Expense {
     source: row.source,
     status: row.status,
     voidedAt: row.voided_at,
-    voidedBy: row.voided_by,
     createdAt: row.created_at,
   }
 }
