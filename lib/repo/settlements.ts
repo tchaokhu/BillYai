@@ -61,7 +61,12 @@ export async function claimSettlement(
   if (input.fromMemberId === input.toMemberId) {
     throw new Error('claimSettlement: จ่ายเงินให้ตัวเองไม่ได้ ลูกหนี้กับเจ้าหนี้ต้องคนละคน')
   }
-  await assertMembersInGroup(input.groupId, [input.fromMemberId, input.toMemberId], db)
+  await assertGroupActive(input.groupId, db)
+  // `claimedBy` เขียนลงแถวเหมือน from/to จึงต้องผ่านด่านเดียวกัน — FK ชี้
+  // `member(id)` การันตีแค่ว่ามีตัวตน ไม่ได้การันตีว่าอยู่วงเดียวกับ settlement
+  const involved = [input.fromMemberId, input.toMemberId]
+  if (input.claimedBy !== undefined) involved.push(input.claimedBy)
+  await assertMembersInGroup(input.groupId, involved, db, 'claimSettlement')
 
   const { rows } = await db.query<SettlementRow>(
     `insert into settlement (
@@ -181,6 +186,19 @@ async function ruleOnClaim(
 ): Promise<Settlement> {
   assertVia(by.confirmedVia, 'confirmedVia')
 
+  const label = next === 'confirmed' ? 'confirmSettlement' : 'rejectSettlement'
+  // อ่านวงของแถวนี้ก่อนเพื่อตรวจ `confirmedBy` — `group_id` ของ settlement
+  // เปลี่ยนไม่ได้ การอ่านล่วงหน้าจึงไม่ใช่ช่องแข่งกัน ส่วนด่านกัน double-confirm
+  // ยังอยู่ใน `where status = 'claimed'` ของคำสั่งเดียวข้างล่างเหมือนเดิม
+  const existing = await db.query<{ group_id: string }>(
+    `select group_id from settlement where id = $1`,
+    [id],
+  )
+  const groupId = existing.rows[0]?.group_id
+  if (groupId !== undefined) {
+    await assertMembersInGroup(groupId, [by.confirmedBy], db, label)
+  }
+
   const { rows } = await db.query<SettlementRow>(
     `update settlement
         set status = $2, confirmed_at = now(), confirmed_by = $3, confirmed_via = $4
@@ -190,7 +208,7 @@ async function ruleOnClaim(
   )
   const row = rows[0]
   if (!row) {
-    return explainMiss(id, next === 'confirmed' ? 'confirmSettlement' : 'rejectSettlement', db)
+    return explainMiss(id, label, db)
   }
   return toSettlement(row)
 }
@@ -237,10 +255,28 @@ function assertVia(via: SettlementVia, label: string): void {
  * ไม่ได้บังคับว่าสมาชิกต้องอยู่วงเดียวกับ `group_id` — ถ้าไม่ตรวจตรงนี้
  * settlement ที่อ้างสมาชิกวงอื่นจะลอยอยู่ในวงโดยไม่มีใครเห็น แล้วยอดของสองวงเพี้ยน
  */
+/**
+ * แจ้งจ่ายเข้าวงที่ถูกลบไม่ได้ — ด้วยเหตุผลเดียวกับ `assertGroupActive` ใน
+ * `lib/repo/expenses.ts`: วงที่ soft-delete แล้วหายไปจากเงินจมข้ามวง แถวที่หลุด
+ * เข้าไปจึงขยับยอดหนี้ในที่ที่ไม่มีใครมองเห็นแล้ว
+ */
+async function assertGroupActive(groupId: string, db: Queryable): Promise<void> {
+  const { rows } = await db.query<{ status: string }>(
+    `select status from ledger_group where id = $1`,
+    [groupId],
+  )
+  const status = rows[0]?.status
+  if (status === undefined) throw new Error(`claimSettlement: ไม่พบวง ${groupId}`)
+  if (status !== 'active') {
+    throw new Error(`claimSettlement: วง ${groupId} ถูกลบไปแล้ว แจ้งจ่ายเข้าไปไม่ได้`)
+  }
+}
+
 async function assertMembersInGroup(
   groupId: string,
   memberIds: readonly MemberId[],
   db: Queryable,
+  label: string,
 ): Promise<void> {
   const { rows } = await db.query<{ id: string; group_id: string }>(
     `select id, group_id from member where id = any($1::uuid[])`,
@@ -249,11 +285,11 @@ async function assertMembersInGroup(
   for (const memberId of memberIds) {
     const found = rows.find((r) => r.id === memberId)
     if (!found) {
-      throw new Error(`claimSettlement: ไม่พบสมาชิก ${memberId}`)
+      throw new Error(`${label}: ไม่พบสมาชิก ${memberId}`)
     }
     if (found.group_id !== groupId) {
       throw new Error(
-        `claimSettlement: สมาชิก ${memberId} อยู่คนละวงกับ settlement — หนี้ไม่ข้ามวง`,
+        `${label}: สมาชิก ${memberId} อยู่คนละวงกับ settlement — หนี้ไม่ข้ามวง`,
       )
     }
   }

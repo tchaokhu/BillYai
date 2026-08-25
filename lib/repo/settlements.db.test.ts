@@ -11,6 +11,7 @@ import { afterAll, describe, expect, it } from 'vitest'
 import { randomUUID } from 'node:crypto'
 import { closePool, getPool, withTransaction } from '@/lib/db/client'
 import { makeGroup, makeMembers, makeSettlement } from '@/lib/db/fixtures'
+import { softDeleteGroup } from '@/lib/repo/groups'
 import type { SettlementRow, SettlementVia } from '@/lib/db/rows'
 import type { MemberId } from '@/lib/types'
 import {
@@ -45,6 +46,81 @@ async function makeScene(): Promise<{
 function fromOutside(via: string): SettlementVia {
   return via as SettlementVia
 }
+
+describe('การตรวจวงของทุก member id ที่เขียนลงแถว', () => {
+  it('claimedBy จากวงอื่น → throw', async () => {
+    const { groupId, debtor, creditor } = await makeScene()
+    const stranger = await makeScene()
+
+    await expect(
+      claimSettlement({
+        groupId,
+        fromMemberId: debtor,
+        toMemberId: creditor,
+        amountSatang: 5000,
+        claimedBy: stranger.debtor,
+        claimedVia: 'liff',
+      }),
+    ).rejects.toThrow(/คนละวง/)
+    expect(await listSettlements(groupId)).toHaveLength(0)
+  })
+
+  it('confirmedBy จากวงอื่น → throw และแถวยังเป็น claimed', async () => {
+    const { groupId, debtor, creditor } = await makeScene()
+    const stranger = await makeScene()
+    const claim = await claimSettlement({
+      groupId,
+      fromMemberId: debtor,
+      toMemberId: creditor,
+      amountSatang: 5000,
+      claimedVia: 'liff',
+    })
+
+    await expect(
+      confirmSettlement(claim.id, {
+        confirmedBy: stranger.creditor,
+        confirmedVia: 'liff',
+      }),
+    ).rejects.toThrow(/คนละวง/)
+    expect((await findSettlementById(claim.id))?.status).toBe('claimed')
+  })
+
+  it('rejectedBy จากวงอื่น → throw เช่นกัน', async () => {
+    const { groupId, debtor, creditor } = await makeScene()
+    const stranger = await makeScene()
+    const claim = await claimSettlement({
+      groupId,
+      fromMemberId: debtor,
+      toMemberId: creditor,
+      amountSatang: 5000,
+      claimedVia: 'liff',
+    })
+
+    await expect(
+      rejectSettlement(claim.id, {
+        confirmedBy: stranger.creditor,
+        confirmedVia: 'liff',
+      }),
+    ).rejects.toThrow(/คนละวง/)
+    expect((await findSettlementById(claim.id))?.status).toBe('claimed')
+  })
+
+  it('claim เข้าวงที่ soft-delete แล้ว → throw', async () => {
+    const { groupId, debtor, creditor } = await makeScene()
+    await softDeleteGroup(groupId)
+
+    await expect(
+      claimSettlement({
+        groupId,
+        fromMemberId: debtor,
+        toMemberId: creditor,
+        amountSatang: 5000,
+        claimedVia: 'liff',
+      }),
+    ).rejects.toThrow(/ถูกลบ/)
+    expect(await listSettlements(groupId)).toHaveLength(0)
+  })
+})
 
 describe('claimSettlement', () => {
   it('สร้างเป็น claimed เสมอ และช่องของเจ้าหนี้ยังว่างทั้งสามช่อง', async () => {

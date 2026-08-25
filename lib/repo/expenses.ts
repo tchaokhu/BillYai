@@ -30,7 +30,7 @@ import {
   type ExpenseShareRow,
   type ExpenseSource,
 } from '@/lib/db/rows'
-import { addSurcharge } from '@/lib/split'
+import { addSurcharge, splitExpense } from '@/lib/split'
 import type { MemberId, SplitMode } from '@/lib/types'
 
 // ─── สัญญาที่โมดูลอื่นเรียก ───────────────────────────────────────────
@@ -204,6 +204,75 @@ function assertItems(input: CommitExpenseInput, participants: ReadonlySet<Member
   if (stated !== input.totalSatang) {
     throw new Error(`ผลรวมราคารายการ (${stated}) ไม่เท่ากับยอดบิล (${input.totalSatang})`)
   }
+
+  assertItemsMatchShares(input, input.items)
+}
+
+/**
+ * รายการต้องอธิบายยอดรายคนที่กำลังจะเขียนได้จริง
+ *
+ * `Σ item = total` กับ `Σ share = grandTotal` ผ่านพร้อมกันได้โดยที่ทั้งสองพูดคนละ
+ * เรื่อง: สเต๊กชิ้นเดียวระบุว่า ก กินคนเดียว แต่ยอดไปลงที่ ข ทั้งก้อน — ต่างคน
+ * ต่างบวกได้ครบ ไม่มีด่านไหนเห็น. บิลนั้นจะถูกเก็บพร้อมรายการที่ขัดกับยอดที่มัน
+ * ควรอธิบาย และหน้าจอแก้บิลจะคำนวณได้อีกคำตอบหนึ่ง
+ *
+ * ตรวจด้วย `splitExpense` ตัวเดียวกับที่แตกบิล ไม่ได้เขียนสูตรใหม่ที่นี่ —
+ * ด้วยเหตุผลเดียวกับที่ `addSurcharge` ถูก export ออกมาใช้ร่วม
+ *
+ * **เผื่อไว้ `items.length + 1` สตางค์ต่อคน**: เศษของแต่ละชิ้นตกกับใครขึ้นกับ
+ * ลำดับผู้ร่วมหาร ซึ่งผู้เรียกจาก LIFF ไม่มีเหตุผลต้องรักษาให้ตรงกับตอนคำนวณ
+ * แต่ละชิ้นจึงคลาดได้ 1 สตางค์ต่อคน บวกอีก 1 จากการกระจาย surcharge.
+ * ช่วงนี้แคบเกินกว่าที่บิลซึ่งขัดกันจริงจะรอด และกว้างพอไม่ให้ปฏิเสธบิลที่ถูก
+ */
+function assertItemsMatchShares(
+  input: CommitExpenseInput,
+  items: NonNullable<CommitExpenseInput['items']>,
+): void {
+  const recomputed = splitExpense({
+    totalSatang: input.totalSatang,
+    surchargePct: input.surchargePct,
+    payerId: input.payerMemberId,
+    mode: 'itemized',
+    participants: input.shares.map(share => ({ memberId: share.memberId })),
+    items: items.map(item => ({
+      name: item.name,
+      amountSatang: item.amountSatang,
+      memberIds: item.shares.map(share => share.memberId),
+    })),
+  })
+
+  const expected = new Map(recomputed.map(share => [share.memberId, share.amountSatang]))
+  const tolerance = items.length + 1
+
+  for (const share of input.shares) {
+    const want = expected.get(share.memberId) ?? 0
+    if (Math.abs(share.amountSatang - want) > tolerance) {
+      throw new Error(
+        `ยอดของ ${share.memberId} (${share.amountSatang}) ไม่ตรงกับรายการที่เขากิน ` +
+          `(คำนวณได้ ${want})`,
+      )
+    }
+  }
+}
+
+/**
+ * บิลใหม่เข้าวงที่ถูกลบไม่ได้
+ *
+ * วงที่ soft-delete แล้วถูกกรองออกจากเงินจมข้ามวง (`lib/repo/ledger.ts`) บิลที่
+ * หลุดเข้าไปจึงเป็นหนี้ที่มีอยู่จริงในตารางแต่ไม่โผล่ในยอดที่เจ้าหนี้ใช้ทวง —
+ * และมันนั่งอยู่ในวงที่รอลบถาวรตามกำหนด 30 วันของ D18. request ที่ค้างอยู่ตอน
+ * บอทถูกเตะออกจากกลุ่มคือทางที่เกิดขึ้นจริง ไม่ใช่กรณีสมมุติ
+ */
+async function assertGroupActive(db: Queryable, groupId: string): Promise<void> {
+  const { rows } = await db.query<{ status: string }>(
+    `select status from ledger_group where id = $1`,
+    [groupId],
+  )
+  const status = rows[0]?.status
+  if (status === undefined) throw new Error(`ไม่พบวง ${groupId}`)
+  if (status !== 'active') {
+    throw new Error(`วง ${groupId} ถูกลบไปแล้ว เขียนบิลใหม่เข้าไปไม่ได้`)
+  }
 }
 
 /**
@@ -300,6 +369,7 @@ async function insertItems(
 async function writeExpense(db: Queryable, input: CommitExpenseInput): Promise<Expense> {
   const memberIds = new Set<MemberId>([input.payerMemberId, input.createdBy])
   for (const share of input.shares) memberIds.add(share.memberId)
+  await assertGroupActive(db, input.groupId)
   await assertSameGroup(db, input.groupId, [...memberIds])
 
   const expense = await insertExpense(db, input)

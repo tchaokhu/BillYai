@@ -22,6 +22,7 @@ import {
   uniqueName,
   voidExpense as voidExpenseFixture,
 } from '@/lib/db/fixtures'
+import { restoreGroup, softDeleteGroup } from '@/lib/repo/groups'
 import { addSurcharge, splitExpense } from '@/lib/split'
 import type { MemberId, SplitInput } from '@/lib/types'
 import {
@@ -521,6 +522,92 @@ describe('commitExpense ปฏิเสธอินพุตที่ผิด',
     expect(await countShares(expense.id)).toBe(2)
   })
 
+  /**
+   * `Σ item = total` กับ `Σ share = grandTotal` ผ่านได้พร้อมกันโดยที่ item
+   * บอกคนละเรื่องกับยอด — สเต๊กชิ้นเดียว 1000 ระบุว่า ก กินคนเดียว แต่ยอดกลับ
+   * ไปลงที่ ข ทั้งก้อน ทั้งสองด่านเดิมมองไม่เห็นเพราะต่างคนต่างบวกได้ครบ
+   */
+  it('items ที่ขัดกับ shares → throw ก่อนเขียน', async () => {
+    const group = await makeGroup()
+    const [a, b] = await makeTrio(group.id)
+
+    await expect(
+      commitExpense({
+        ...validInput(group.id, a, b),
+        splitMode: 'itemized',
+        totalSatang: 100000,
+        surchargePct: 0,
+        shares: [
+          { memberId: a.id, amountSatang: 0 },
+          { memberId: b.id, amountSatang: 100000 },
+        ],
+        items: [{ name: 'สเต๊ก', amountSatang: 100000, shares: [{ memberId: a.id }] }],
+      }),
+    ).rejects.toThrow(/รายการ/)
+    expect(await countExpenses(group.id)).toBe(0)
+  })
+
+  it('items ที่ตรงกับ shares ผ่าน แม้ลำดับ shares สลับกับตอนคำนวณ', async () => {
+    const group = await makeGroup()
+    const [a, b, c] = await makeTrio(group.id)
+    const items = [
+      { name: 'หมู', amountSatang: 10000, memberIds: [a.id, b.id] },
+      { name: 'ผัก', amountSatang: 3333, memberIds: [b.id, c.id] },
+      { name: 'เหล้า', amountSatang: 6667, memberIds: [a.id, c.id] },
+    ]
+    const shares = splitExpense({
+      totalSatang: 20000,
+      surchargePct: 17,
+      payerId: a.id,
+      mode: 'itemized',
+      participants: [{ memberId: a.id }, { memberId: b.id }, { memberId: c.id }],
+      items,
+    })
+
+    const expense = await commitExpense({
+      ...validInput(group.id, a, b),
+      splitMode: 'itemized',
+      totalSatang: 20000,
+      surchargePct: 17,
+      payerMemberId: a.id,
+      // ลำดับสลับ — ผู้เรียกที่ส่งมาจาก LIFF ไม่มีเหตุผลต้องรักษาลำดับเดิม
+      shares: [...shares]
+        .reverse()
+        .map(s => ({ memberId: s.memberId, amountSatang: s.amountSatang })),
+      items: items.map(item => ({
+        name: item.name,
+        amountSatang: item.amountSatang,
+        shares: item.memberIds.map(memberId => ({ memberId })),
+      })),
+    })
+    expect(await countShares(expense.id)).toBe(3)
+  })
+
+  /**
+   * วงที่ถูกลบไปแล้วถูก `MEMBERSHIP_SQL` ของ ledger กรองออกจากเงินจม — บิลที่
+   * หลุดเข้าไปจึงเป็นหนี้ที่มีอยู่จริงแต่ไม่โผล่ในยอดที่เจ้าหนี้ใช้ทวง
+   */
+  it('เขียนบิลเข้าวงที่ soft-delete แล้ว → throw', async () => {
+    const group = await makeGroup()
+    const [payer, other] = await makeTrio(group.id)
+    await softDeleteGroup(group.id)
+
+    await expect(
+      commitExpense(validInput(group.id, payer, other)),
+    ).rejects.toThrow(/ถูกลบ/)
+    expect(await countExpenses(group.id)).toBe(0)
+  })
+
+  it('วงที่กู้คืนแล้วเขียนได้ตามปกติ', async () => {
+    const group = await makeGroup()
+    const [payer, other] = await makeTrio(group.id)
+    await softDeleteGroup(group.id)
+    await restoreGroup(group.id)
+
+    const expense = await commitExpense(validInput(group.id, payer, other))
+    expect(await countShares(expense.id)).toBe(2)
+  })
+
   it("splitMode='itemized' ที่ไม่ส่ง items → throw", async () => {
     const group = await makeGroup()
     const [payer, other] = await makeTrio(group.id)
@@ -941,5 +1028,129 @@ describe('on delete cascade', () => {
 
     await getPool().query(`delete from expense where id = $1`, [expense.id])
     expect(await countShares(expense.id)).toBe(0)
+  })
+})
+
+// ─── tolerance ของการกระทบยอด items ↔ shares ─────────────────────────
+
+/** PRNG ที่ seed คงที่ — บิลชุดเดิมทุกครั้งที่รัน ไม่ใช่แดงสลับเขียวรอบเว้นรอบ */
+function mulberry32(seed: number): () => number {
+  let a = seed
+  return () => {
+    a = (a + 0x6d2b79f5) | 0
+    let t = Math.imul(a ^ (a >>> 15), 1 | a)
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+}
+
+describe('tolerance ของ assertItemsMatchShares ไม่ปฏิเสธบิลที่ถูก', () => {
+  it('สุ่ม 120 บิล itemized ลำดับ shares สลับ — ต้องผ่านทุกใบ', async () => {
+    const rand = mulberry32(20260825)
+    const rnd = (n: number) => Math.floor(rand() * n)
+    const group = await makeGroup()
+    const members = await makeMembers(
+      group.id,
+      Array.from({ length: 8 }, (_, i) => uniqueName(`p${i}`)),
+    )
+
+    for (let round = 0; round < 120; round++) {
+      const count = 2 + rnd(6)
+      const ids = members.slice(0, count).map(m => m.id)
+      const itemCount = 1 + rnd(6)
+      const items = Array.from({ length: itemCount }, (_, k) => {
+        const eaters = ids.filter(() => rnd(2) === 0)
+        return {
+          name: `i${k}`,
+          amountSatang: 1 + rnd(50_000),
+          memberIds: eaters.length > 0 ? eaters : [ids[rnd(count)] ?? ids[0] ?? ''],
+        }
+      })
+      const totalSatang = items.reduce((s, i) => s + i.amountSatang, 0)
+      const surchargePct = [0, 7, 10, 17, 7.5, 12.25][rnd(6)] ?? 0
+      const payerId = ids[rnd(count)] ?? ids[0] ?? ''
+
+      const shares = splitExpense({
+        totalSatang,
+        surchargePct,
+        payerId,
+        mode: 'itemized',
+        participants: ids.map(memberId => ({ memberId })),
+        items,
+      })
+
+      // สลับลำดับแบบสุ่ม — ผู้เรียกจาก LIFF ไม่มีเหตุผลต้องรักษาลำดับเดิม
+      const shuffled = [...shares]
+      for (let i = shuffled.length - 1; i > 0; i--) {
+        const j = rnd(i + 1)
+        const a = shuffled[i]
+        const b = shuffled[j]
+        if (a && b) {
+          shuffled[i] = b
+          shuffled[j] = a
+        }
+      }
+
+      await commitExpense({
+        groupId: group.id,
+        description: `สุ่มรอบ ${round}`,
+        totalSatang,
+        surchargePct,
+        payerMemberId: payerId,
+        splitMode: 'itemized',
+        spentAt: '2026-02-01',
+        createdBy: payerId,
+        source: 'liff',
+        shares: shuffled.map(s => ({ memberId: s.memberId, amountSatang: s.amountSatang })),
+        items: items.map(i => ({
+          name: i.name,
+          amountSatang: i.amountSatang,
+          shares: i.memberIds.map(memberId => ({ memberId })),
+        })),
+      })
+    }
+    expect(true).toBe(true)
+  })
+
+  it('เพี้ยนเกิน tolerance ต้องโดนจับ — ย้ายยอด 1 บาทข้ามคน', async () => {
+    const group = await makeGroup()
+    const [a, b] = await makeMembers(group.id, [uniqueName('ก'), uniqueName('ข')])
+    if (!a || !b) throw new Error('fixture')
+    const items = [
+      { name: 'หมู', amountSatang: 20000, memberIds: [a.id] },
+      { name: 'ผัก', amountSatang: 20000, memberIds: [b.id] },
+    ]
+    const shares = splitExpense({
+      totalSatang: 40000,
+      surchargePct: 0,
+      payerId: a.id,
+      mode: 'itemized',
+      participants: [{ memberId: a.id }, { memberId: b.id }],
+      items,
+    })
+    const tampered = shares.map(s => ({
+      memberId: s.memberId,
+      amountSatang: s.memberId === a.id ? s.amountSatang - 100 : s.amountSatang + 100,
+    }))
+
+    await expect(
+      commitExpense({
+        groupId: group.id,
+        description: 'ย้ายยอดข้ามคน',
+        totalSatang: 40000,
+        surchargePct: 0,
+        payerMemberId: a.id,
+        splitMode: 'itemized',
+        spentAt: '2026-02-01',
+        createdBy: a.id,
+        source: 'llm',
+        shares: tampered,
+        items: items.map(i => ({
+          name: i.name,
+          amountSatang: i.amountSatang,
+          shares: i.memberIds.map(memberId => ({ memberId })),
+        })),
+      }),
+    ).rejects.toThrow(/รายการ/)
   })
 })
