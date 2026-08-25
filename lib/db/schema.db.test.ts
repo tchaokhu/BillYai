@@ -212,6 +212,7 @@ describe('check constraint', () => {
     const names = found.map(r => r.conname)
 
     // enum ทุกตัวถูกบังคับที่ DB ไม่ใช่แค่ในโค้ด
+    expect(names).toContain('member_display_name_check')
     expect(names).toContain('ledger_group_kind_check')
     expect(names).toContain('ledger_group_status_check')
     expect(names).toContain('expense_split_mode_check')

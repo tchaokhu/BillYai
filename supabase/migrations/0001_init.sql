@@ -67,6 +67,10 @@ create table member (
   link_token_hash bytea,                           -- D20: sha256 of the Nudge Link token
   link_token_at   timestamptz,                     -- revoke = issue a new one
   created_at      timestamptz not null default now(),
+  -- A member with a blank name can pay for a bill and hold debt but cannot be
+  -- addressed in chat, and it permanently occupies the unique slot for that
+  -- string. The repository guards this too; the constraint is what makes it true.
+  constraint member_display_name_check check (btrim(display_name) <> ''),
   unique (group_id, display_name),
   -- Nulls do not collide in a unique index, so any number of Placeholders can
   -- coexist while a claimed person still gets exactly one member per group.

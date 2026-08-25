@@ -449,6 +449,34 @@ describe('commitExpense ปฏิเสธอินพุตที่ผิด',
     ).rejects.toThrow(/ทศนิยม/)
   })
 
+  /**
+   * `2026-02-30` ตรงรูปแบบแต่ไม่มีอยู่จริง — ถ้าปล่อยผ่าน transaction จะเปิดไป
+   * แล้วค่อยตายที่ Postgres ด้วย `date/time field value out of range` ดิบๆ
+   * ซึ่งขัดกับหน้าที่ของ `assertInput` ที่ต้องตรวจให้จบก่อนแตะ DB
+   */
+  it('spentAt ที่ไม่มีอยู่จริงในปฏิทิน → throw ก่อนเปิด transaction', async () => {
+    const group = await makeGroup()
+    const [payer, other] = await makeTrio(group.id)
+
+    for (const spentAt of ['2026-02-30', '2026-13-01', '2026-00-10', '2026-04-31', '2026-01-32']) {
+      await expect(
+        commitExpense({ ...validInput(group.id, payer, other), spentAt }),
+      ).rejects.toThrow(/spentAt/)
+    }
+    expect(await countExpenses(group.id)).toBe(0)
+  })
+
+  it('29 กุมภาฯ ปีอธิกสุรทินยังเขียนได้', async () => {
+    const group = await makeGroup()
+    const [payer, other] = await makeTrio(group.id)
+
+    const expense = await commitExpense({
+      ...validInput(group.id, payer, other),
+      spentAt: '2028-02-29',
+    })
+    expect(expense.spentAt).toBe('2028-02-29')
+  })
+
   it('spentAt ที่ไม่ใช่ YYYY-MM-DD → throw', async () => {
     const group = await makeGroup()
     const [payer, other] = await makeTrio(group.id)
@@ -1028,6 +1056,44 @@ describe('on delete cascade', () => {
 
     await getPool().query(`delete from expense where id = $1`, [expense.id])
     expect(await countShares(expense.id)).toBe(0)
+  })
+})
+
+// ─── listExpenses ที่ผู้เรียกไม่ผ่าน tsc ──────────────────────────────
+
+describe('listExpenses กับค่าที่มาจากขอบระบบ', () => {
+  /**
+   * `searchParams.get('tag')` คืน `string | null` — route ที่ส่งต่อตรงๆ จะได้
+   * `event_tag = null` ซึ่งแมตช์ไม่ได้เลย ผู้ใช้เห็น "ไม่มีบิล" แทนที่จะเห็นทั้งหมด
+   * ต่างจาก `includeVoided !== true` ที่ fail closed อยู่แล้ว
+   */
+  it('eventTag เป็น null = ไม่กรอง ไม่ใช่กรองด้วยค่า null', async () => {
+    const group = await makeGroup()
+    const [payer, other] = await makeTrio(group.id)
+    await commitExpense(validInput(group.id, payer, other))
+    await commitExpense({
+      ...validInput(group.id, payer, other),
+      eventTag: 'เชียงใหม่',
+    })
+
+    const all = await listExpenses(group.id, {
+      eventTag: null as unknown as string,
+    })
+    expect(all).toHaveLength(2)
+  })
+
+  it('eventTag ที่เป็นสตริงจริงยังกรองเหมือนเดิม', async () => {
+    const group = await makeGroup()
+    const [payer, other] = await makeTrio(group.id)
+    await commitExpense(validInput(group.id, payer, other))
+    await commitExpense({
+      ...validInput(group.id, payer, other),
+      eventTag: 'เชียงใหม่',
+    })
+
+    const tagged = await listExpenses(group.id, { eventTag: 'เชียงใหม่' })
+    expect(tagged).toHaveLength(1)
+    expect(tagged[0]?.eventTag).toBe('เชียงใหม่')
   })
 })
 

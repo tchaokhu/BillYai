@@ -289,6 +289,44 @@ describe('findMemberByName', () => {
   })
 })
 
+describe('ชื่อว่างสร้างไม่ได้', () => {
+  /**
+   * `display_name` ว่างสร้าง member ที่เป็นผู้จ่ายได้ ถือหนี้ได้ แต่เรียกชื่อใน
+   * แชทไม่ได้ — และมันจองสล็อต `unique (group_id, display_name)` ของสตริงว่าง
+   * ไว้ถาวร. rule parser สร้างไม่ได้ แต่ทาง LLM/LIFF ที่ Roster โตเองรองรับได้
+   */
+  it('ensureMember ด้วยชื่อว่างหรือช่องว่างล้วน → throw', async () => {
+    const group = await makeGroup()
+    for (const name of ['', '   ', '\t', '\n ']) {
+      await expect(ensureMember(group.id, name)).rejects.toThrow(/ชื่อ/)
+    }
+    expect(await countMembers(group.id)).toBe(0)
+  })
+
+  it('ensureMembers ที่มีชื่อว่างปนมา → throw ทั้งชุด ไม่สร้างคนอื่นทิ้งไว้', async () => {
+    const group = await makeGroup()
+    await expect(
+      ensureMembers(group.id, [uniqueName('ดี'), '  ', uniqueName('ดี2')]),
+    ).rejects.toThrow(/ชื่อ/)
+    expect(await countMembers(group.id)).toBe(0)
+  })
+
+  it('DB กันอีกชั้น — insert ตรงด้วยชื่อว่างต้องพังที่ constraint', async () => {
+    const group = await makeGroup()
+    await expect(
+      getPool().query(`insert into member (group_id, display_name) values ($1, '  ')`, [
+        group.id,
+      ]),
+    ).rejects.toThrow(/member_display_name_check/)
+  })
+
+  it('ชื่อที่มีช่องว่างหัวท้ายแต่มีตัวอักษรจริงยังใช้ได้', async () => {
+    const group = await makeGroup()
+    const member = await ensureMember(group.id, ' กอล์ฟ ')
+    expect(member.displayName).toBe(' กอล์ฟ ')
+  })
+})
+
 describe('ensureMembers', () => {
   it('รักษาลำดับตาม input', async () => {
     const group = await makeGroup()

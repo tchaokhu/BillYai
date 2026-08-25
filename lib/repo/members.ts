@@ -119,6 +119,23 @@ export async function findMemberByLinkTokenHash(
 // ─── Roster ที่โตเอง (D16) ────────────────────────────────────────────
 
 /**
+ * ชื่อว่างหรือช่องว่างล้วนสร้างไม่ได้
+ *
+ * member แบบนั้นเป็นผู้จ่ายได้ ถือหนี้ได้ แต่เรียกชื่อในแชทไม่ได้ และมันจอง
+ * สล็อต `unique (group_id, display_name)` ของสตริงนั้นไว้ถาวร — คนถัดไปที่พิมพ์
+ * ผิดแบบเดียวกันจะได้ member ตัวเดิมที่ไม่มีใครรู้ว่าเป็นใคร
+ *
+ * ไม่ `trim` ให้เอง: ` กอล์ฟ ` กับ `กอล์ฟ` เป็นคนละแถวมาแต่ต้นตาม unique index
+ * การเริ่ม trim ตอนนี้จะทำให้ชื่อที่มีอยู่แล้วชนกันเงียบๆ — เป็นการย้าย Roster
+ * ที่ต้องมี migration ไม่ใช่ผลข้างเคียงของการกันชื่อว่าง
+ */
+function assertDisplayName(displayName: string): void {
+  if (displayName.trim() === '') {
+    throw new Error('ชื่อสมาชิกว่างไม่ได้')
+  }
+}
+
+/**
  * ขอ Member ด้วยชื่อ — ไม่มีก็สร้าง Placeholder ให้ มีแล้วคืนตัวเดิม
  *
  * **ทำไมเป็น `on conflict` ไม่ใช่ select-then-insert:** ชื่อเดียวกันมาถึงพร้อมกัน
@@ -135,6 +152,7 @@ export async function ensureMember(
   displayName: string,
   db?: Queryable,
 ): Promise<Member> {
+  assertDisplayName(displayName)
   const { rows } = await q(db).query<MemberRow>(
     `insert into member (group_id, display_name)
      values ($1, $2)
@@ -162,6 +180,8 @@ export async function ensureMembers(
   db?: Queryable,
 ): Promise<Member[]> {
   if (displayNames.length === 0) return []
+  // ตรวจให้ครบทั้งชุดก่อนยิง — ชื่อเสียตัวเดียวต้องไม่ทิ้งคนอื่นที่สร้างไปแล้วไว้
+  for (const name of displayNames) assertDisplayName(name)
 
   // เรียงก่อนยิงเพื่อกัน deadlock: `on conflict do update` ล็อกแถวที่ชนตามลำดับ
   // ใน array — สองสายที่ส่งชื่อชุดเดียวกันมาคนละลำดับจะล็อกไขว้กันแล้วโดน 40P01

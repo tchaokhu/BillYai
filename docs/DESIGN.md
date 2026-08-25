@@ -144,6 +144,7 @@ create table member (
   link_token_hash bytea,                           -- D20: sha256 ของ Nudge Link token
   link_token_at   timestamptz,                     -- revoke = ออกใหม่
   created_at      timestamptz not null default now(),
+  constraint member_display_name_check check (btrim(display_name) <> ''),
   unique (group_id, display_name),
   unique (group_id, app_user_id)                   -- 1 คน ต่อ 1 member/วง
 );

@@ -74,7 +74,12 @@ export interface ExpenseDetail {
 export interface ListExpensesOptions {
   /** default `false` — บิลที่ยกเลิกแล้วไม่ควรโผล่ในหน้าจอปกติ */
   includeVoided?: boolean
-  eventTag?: string
+  /**
+   * `null` และ `undefined` แปลว่า **ไม่กรอง** เหมือนกัน — `searchParams.get()`
+   * คืน `string | null` route ที่ส่งต่อตรงๆ จึงส่ง `null` มาได้ง่ายที่สุด และ
+   * `event_tag = null` แมตช์ไม่ได้เลย ผู้ใช้จะเห็น "ไม่มีบิล" แทนที่จะเห็นทั้งหมด
+   */
+  eventTag?: string | null
   limit?: number
 }
 
@@ -104,6 +109,32 @@ function decimalPlaces(value: number, label: string): number {
   return (text.split('.')[1] ?? '').length
 }
 
+/**
+ * วันที่ต้องตรงรูปแบบ **และมีอยู่จริงในปฏิทิน**
+ *
+ * `2026-02-30` ผ่าน regex สบายๆ แล้วไปตายที่ Postgres ด้วย `date/time field
+ * value out of range` หลังจาก transaction เปิดไปแล้ว ซึ่งขัดกับหน้าที่ของ
+ * `assertInput` ที่ต้องตรวจทุกอย่างที่ตรวจได้ให้จบก่อนแตะ DB
+ *
+ * ประกอบกลับด้วย `Date.UTC` ไม่ใช่ `new Date(string)` — ตัวหลังตีความ timezone
+ * ของเครื่อง แล้ววันที่จะเลื่อนเองบน server ที่ไม่ได้อยู่ไทย ซึ่งเป็นบั๊กเดียวกับ
+ * ที่ `lib/db/client.ts` ตั้ง type parser ของ `date` ไว้กัน
+ */
+function assertSpentAt(spentAt: string): void {
+  if (!SPENT_AT_PATTERN.test(spentAt)) {
+    throw new Error(`spentAt ต้องเป็น 'YYYY-MM-DD' — ได้ ${JSON.stringify(spentAt)}`)
+  }
+  const [year = 0, month = 0, day = 0] = spentAt.split('-').map(Number)
+  const date = new Date(Date.UTC(year, month - 1, day))
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day
+  ) {
+    throw new Error(`spentAt ไม่มีอยู่จริงในปฏิทิน: ${spentAt}`)
+  }
+}
+
 /** ตรวจทุกอย่างที่ตรวจได้โดยไม่ต้องแตะ DB — ต้องผ่านก่อนเปิด transaction */
 function assertInput(input: CommitExpenseInput): void {
   if (!Number.isSafeInteger(input.totalSatang) || input.totalSatang <= 0) {
@@ -120,9 +151,7 @@ function assertInput(input: CommitExpenseInput): void {
   if (input.description.trim() === '') {
     throw new Error('รายละเอียดบิลว่างไม่ได้')
   }
-  if (!SPENT_AT_PATTERN.test(input.spentAt)) {
-    throw new Error(`spentAt ต้องเป็น 'YYYY-MM-DD' — ได้ ${JSON.stringify(input.spentAt)}`)
-  }
+  assertSpentAt(input.spentAt)
   if (input.shares.length === 0) {
     throw new Error('บิลต้องมีผู้ร่วมหารอย่างน้อยหนึ่งคน')
   }
@@ -489,7 +518,7 @@ export async function listExpenses(
   if (options.includeVoided !== true) {
     conditions.push(`status = 'active'`)
   }
-  if (options.eventTag !== undefined) {
+  if (options.eventTag !== undefined && options.eventTag !== null) {
     values.push(options.eventTag)
     conditions.push(`event_tag = $${values.length}`)
   }
