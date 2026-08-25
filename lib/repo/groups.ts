@@ -8,7 +8,8 @@
  * ถ้าไปหยิบจาก pool เองจะกลายเป็นคนละ transaction กับที่ผู้เรียกเปิดไว้
  */
 
-import { getPool, type Queryable } from '@/lib/db/client'
+import type { PoolClient } from 'pg'
+import { getPool, withTransaction, type Queryable } from '@/lib/db/client'
 import { toLedgerGroup, type LedgerGroup, type LedgerGroupRow } from '@/lib/db/rows'
 
 function db(explicit?: Queryable): Queryable {
@@ -206,6 +207,55 @@ export async function softDeleteGroup(
     [groupId],
   )
   return requireGroup(group, groupId)
+}
+
+/**
+ * ลบวงถาวรพร้อมทุกอย่างที่ห้อยอยู่ — ปลายทางของกำหนด 30 วันใน D18
+ *
+ * ทำไมไม่ `delete from ledger_group` เฉยๆ ทั้งที่มี `on delete cascade`:
+ * cascade ของ `ledger_group` ไปถึง `member` และ `expense` ก็จริง แต่
+ * `expense_share.member_id`, `expense_item_share.member_id`,
+ * `settlement.from_member_id/to_member_id` และ `audit_log.actor` ชี้ `member(id)`
+ * **โดยไม่มี on-delete action** ซึ่งตั้งใจให้เป็นแบบนั้น: คนที่ยังมีบิลค้างต้อง
+ * ลบทิ้งเฉยๆ ไม่ได้ (D18 มาร์ก ไม่ลบ). ผลคือคำสั่ง delete เดียวจะชน FK ทันที
+ * ที่วงมีบิล — การลบทั้งวงจึงต้องไล่จากใบไปหาราก
+ *
+ * ทั้งหมดอยู่ใน transaction เดียว: วงที่ลบไปครึ่งทางคือวงที่ไม่มีสมาชิกแล้วแต่
+ * ยังมีบิล ซึ่งอ่านกลับมาไม่ได้และซ่อมด้วยมือไม่ได้ด้วย
+ */
+export async function hardDeleteGroup(groupId: string, tx?: PoolClient): Promise<void> {
+  if (tx !== undefined && tx !== null) return purgeGroup(tx, groupId)
+  return withTransaction(client => purgeGroup(client, groupId))
+}
+
+async function purgeGroup(q: Queryable, groupId: string): Promise<void> {
+  const { rows } = await q.query<{ id: string }>(
+    `select id from ledger_group where id = $1 for update`,
+    [groupId],
+  )
+  if (!rows[0]) throw new Error(`ไม่พบวง ${groupId}`)
+
+  await q.query(
+    `delete from expense_item_share x
+      using expense_item i, expense e
+      where x.item_id = i.id and i.expense_id = e.id and e.group_id = $1`,
+    [groupId],
+  )
+  await q.query(
+    `delete from expense_item i using expense e
+      where i.expense_id = e.id and e.group_id = $1`,
+    [groupId],
+  )
+  await q.query(
+    `delete from expense_share s using expense e
+      where s.expense_id = e.id and e.group_id = $1`,
+    [groupId],
+  )
+  await q.query(`delete from settlement where group_id = $1`, [groupId])
+  await q.query(`delete from audit_log where group_id = $1`, [groupId])
+  await q.query(`delete from expense where group_id = $1`, [groupId])
+  await q.query(`delete from member where group_id = $1`, [groupId])
+  await q.query(`delete from ledger_group where id = $1`, [groupId])
 }
 
 export async function restoreGroup(

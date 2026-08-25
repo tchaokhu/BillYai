@@ -11,7 +11,15 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { afterAll, describe, expect, it } from 'vitest'
 import { closePool, getPool, withTransaction, type Queryable } from '@/lib/db/client'
-import { makeAppUser, makeGroup, makePersonalGroup } from '@/lib/db/fixtures'
+import {
+  makeAppUser,
+  makeExpense,
+  makeGroup,
+  makeMembers,
+  makePersonalGroup,
+  makeSettlement,
+  uniqueName,
+} from '@/lib/db/fixtures'
 import type { LedgerGroupRow } from '@/lib/db/rows'
 import {
   createPersonalGroup,
@@ -20,6 +28,7 @@ import {
   findGroupById,
   findGroupByLineGroupId,
   findGroupByOwnerTokenHash,
+  hardDeleteGroup,
   linkPersonalGroupToLine,
   restoreGroup,
   rotateOwnerToken,
@@ -319,6 +328,92 @@ describe('soft-delete และ restore', () => {
 })
 
 // ─── ผูกวงส่วนตัวเข้ากลุ่ม ────────────────────────────────────────────
+
+describe('hardDeleteGroup', () => {
+  /**
+   * D18 ให้ลบข้อมูลตัวเองได้ และวงที่ soft-delete ครบ 30 วันต้องหายถาวร — แต่
+   * `delete from ledger_group` ตรงๆ ทำไม่ได้เมื่อวงมีบิล เพราะ
+   * `expense_share.member_id` ชี้ `member(id)` โดยไม่มี on-delete action
+   * (ตั้งใจ: คนที่ยังมีบิลค้างอยู่ต้องลบทิ้งเฉยๆ ไม่ได้ ตาม "มาร์ก ไม่ลบ")
+   * การลบทั้งวงจึงต้องไล่ลบลูกตามลำดับใน transaction เดียว
+   */
+  it('ลบวงที่มีบิล สมาชิก settlement และ audit ได้จนไม่เหลือเศษ', async () => {
+    const group = await makeGroup()
+    const [payer, other] = await makeMembers(group.id, [uniqueName('ก'), uniqueName('ข')])
+    if (!payer || !other) throw new Error('fixture')
+    const expense = await makeExpense({
+      groupId: group.id,
+      payerMemberId: payer.id,
+      totalSatang: 20000,
+      splitMode: 'itemized',
+      shares: [
+        { memberId: payer.id, amountSatang: 10000 },
+        { memberId: other.id, amountSatang: 10000 },
+      ],
+    })
+    const { rows: itemRows } = await getPool().query<{ id: string }>(
+      `insert into expense_item (expense_id, name, amount_satang)
+       values ($1, 'หมู', 20000) returning id`,
+      [expense.id],
+    )
+    await getPool().query(
+      `insert into expense_item_share (item_id, member_id) values ($1, $2)`,
+      [itemRows[0]?.id, other.id],
+    )
+    await makeSettlement({
+      groupId: group.id,
+      fromMemberId: other.id,
+      toMemberId: payer.id,
+      amountSatang: 5000,
+      status: 'confirmed',
+    })
+    await getPool().query(
+      `insert into audit_log (group_id, actor, actor_via, action, target_type)
+       values ($1, $2, 'line', 'expense.commit', 'expense')`,
+      [group.id, payer.id],
+    )
+
+    await hardDeleteGroup(group.id)
+
+    const { rows } = await getPool().query<{ leftovers: string }>(
+      `select (select count(*) from ledger_group where id = $1)
+            + (select count(*) from member where group_id = $1)
+            + (select count(*) from expense where group_id = $1)
+            + (select count(*) from settlement where group_id = $1)
+            + (select count(*) from audit_log where group_id = $1)
+            + (select count(*) from expense_share where expense_id = $2)
+            + (select count(*) from expense_item where expense_id = $2)
+              as leftovers`,
+      [group.id, expense.id],
+    )
+    expect(Number(rows[0]?.leftovers)).toBe(0)
+  })
+
+  it('วงที่ไม่มีอยู่จริง → throw ไม่ใช่เงียบ', async () => {
+    await expect(hardDeleteGroup(randomUUID())).rejects.toThrow(/ไม่พบวง/)
+  })
+
+  it('ไม่แตะวงอื่น', async () => {
+    const doomed = await makeGroup()
+    const keep = await makeGroup()
+    const [a, b] = await makeMembers(keep.id, [uniqueName('ก'), uniqueName('ข')])
+    if (!a || !b) throw new Error('fixture')
+    await makeExpense({
+      groupId: keep.id,
+      payerMemberId: a.id,
+      totalSatang: 1000,
+      shares: [{ memberId: b.id, amountSatang: 1000 }],
+    })
+
+    await hardDeleteGroup(doomed.id)
+
+    const { rows } = await getPool().query<{ n: number }>(
+      `select count(*)::int as n from expense where group_id = $1`,
+      [keep.id],
+    )
+    expect(rows[0]?.n).toBe(1)
+  })
+})
 
 describe('linkPersonalGroupToLine', () => {
   it('ผูกแล้วกลายเป็นวงกลุ่ม และหาเจอด้วย line_group_id', async () => {
