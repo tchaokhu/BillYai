@@ -89,9 +89,13 @@ https://manager.line.biz/ → เลือกบัญชีที่เพิ�
 |---|---|
 | `Greeting messages` | **ปิด** |
 | `Auto-reply messages` | **ปิด** |
-| `Webhooks` | **เปิด** |
+| `Webhooks` | เปิด — **แต่ยังเปิดไม่ได้ตอนนี้** ดูด้านล่าง |
 
 ค่าเริ่มต้นของ LINE คือเปิด greeting/auto-reply ไว้ทั้งคู่ ต้องไปปิดเอง
+
+> **`Webhooks` จะยังเลือกไม่ได้จนกว่าจะใส่ Webhook URL ก่อน** — LINE ไม่ยอมให้เปิด
+> สวิตช์ที่ไม่มีปลายทาง ข้ามข้อนี้ไปก่อน แล้วกลับมาเปิดหลังทำขั้นที่ 9 (ซึ่งเป็นขั้นที่
+> ใส่ URL จริง) · ปิด greeting/auto-reply ให้เรียบร้อยตอนนี้ได้เลย ไม่ต้องรอ
 
 ---
 
@@ -180,11 +184,18 @@ Developers Console → channel เดิม → แท็บ `LIFF` → `Add`
 
 ยังไม่ต้องมีโค้ดของโปรเจกต์ แค่ยืนยันว่า channel มีชีวิต
 
-1. เข้า Developers Console → แท็บ `Messaging API` → สแกน QR เพื่อเพิ่มบอทเป็นเพื่อน
-2. ตั้ง Webhook URL ชั่วคราวเป็น https://webhook.site/ (กด `Edit` → วาง URL → `Update`
-   → กด `Verify` → เปิด `Use webhook`)
-3. พิมพ์อะไรก็ได้หาบอทในแชท 1:1 → ต้องเห็น event เด้งที่ webhook.site
-4. เชิญบอทเข้ากลุ่มที่มีคนอื่นอย่างน้อย 2 คน → พิมพ์ในกลุ่ม → ต้องเห็น event ที่มี
+**ลำดับสำคัญ: ต้องมี Webhook URL ก่อน ถึงจะเปิดสวิตช์ webhook ได้**
+
+1. เปิด https://webhook.site/ ในแท็บใหม่ — มันสร้าง URL ให้เอง กดคัดลอก
+2. Developers Console → channel → แท็บ `Messaging API` → `Webhook URL` → `Edit`
+   → วาง URL → `Update`
+3. กด `Verify` → ต้องขึ้น `Success`
+4. เปิดสวิตช์ `Use webhook`
+5. กลับไป OA Manager → `Settings` → `Response settings` → ตอนนี้ `Webhooks` เลือกได้แล้ว
+   → ยืนยันว่าเปิดอยู่ (สองที่นี้คือค่าตัวเดียวกัน มักเปลี่ยนตามกันให้เอง)
+6. แท็บ `Messaging API` มี QR → สแกนเพิ่มบอทเป็นเพื่อน
+7. พิมพ์อะไรก็ได้หาบอทในแชท 1:1 → ต้องเห็น request เด้งที่ webhook.site
+8. เชิญบอทเข้ากลุ่มที่มีคนอื่นอย่างน้อย 2 คน → พิมพ์ในกลุ่ม → ต้องเห็น event ที่มี
    `source.type = "group"` พร้อม `groupId`
 
 เห็นครบทั้งสองแบบ = พร้อมทำ S1 แล้ว → ไปต่อที่ `docs/SPIKE-PHASE0.md`
@@ -199,7 +210,7 @@ Developers Console → channel เดิม → แท็บ `LIFF` → `Add`
 
 - [ ] Business ID + LINE OA สร้างแล้ว ประเทศ = ไทย
 - [ ] Messaging API เปิดแล้ว มี provider
-- [ ] Greeting + Auto-reply **ปิด** · Webhooks **เปิด**
+- [ ] Greeting + Auto-reply **ปิด** · Webhooks **เปิด** (เปิดได้หลังใส่ URL ในขั้นที่ 9)
 - [ ] `Allow bot to join group chats` เปิด
 - [ ] `channelSecret` + `channelAccessToken` อยู่ใน `.env.local` (ไม่ได้ commit)
 - [ ] LIFF app สร้างแล้ว scope มี `chat_message.write` (เฉพาะตอนจะทำ S2)
