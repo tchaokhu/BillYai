@@ -119,7 +119,14 @@ https://manager.line.biz/ → เลือกบัญชีที่เพิ�
 | ของ | อยู่ที่ | หมายเหตุ |
 |---|---|---|
 | `channelSecret` | แท็บ `Basic settings` | ใช้ verify signature ของ webhook |
-| `channelAccessToken` | แท็บ `Messaging API` → `Channel access token` → `Issue` | เลือกแบบ **v2.1 (กำหนดวันหมดอายุเอง)** ตามที่ LINE แนะนำ |
+| `channelAccessToken` | แท็บ `Messaging API` → ล่างสุด `Channel access token` → `Issue` | ได้แบบ **long-lived** — พอสำหรับ spike |
+
+**อย่าไปงมหา v2.1 ในคอนโซล** — token v2.1 (กำหนดวันหมดอายุเอง) ออกจากปุ่มในคอนโซลไม่ได้
+ต้องยิง API ด้วย JWT + Assertion Signing Key ปุ่มในคอนโซลออกให้ได้แค่ long-lived เท่านั้น
+เก็บ v2.1 ไว้ตอนขึ้น production ซึ่งการกำหนดอายุและ revoke รายตัวคุ้มกับความยุ่งยาก
+
+long-lived token โชว์เต็มในหน้านั้นตลอด กลับมาก๊อปใหม่ได้ ไม่ต้องกลัวทำหาย ·
+กด `Reissue` เมื่อไหร่ตัวเก่าตายทันที ใช้ตอนสงสัยว่าหลุด
 
 > **ของสองอย่างนี้เป็นความลับ** ใครถือ `channelAccessToken` ก็ส่งข้อความในนามบัญชีเราได้
 > และใครถือ `channelSecret` ก็ปลอม webhook เข้าระบบเราได้
