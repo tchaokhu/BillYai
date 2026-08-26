@@ -9,12 +9,16 @@
     "typecheck": "tsc --noEmit",
     "test:db": "vitest run --config vitest.db.config.ts",
     "test:all": "npm test && npm run test:db",
-    "db:reset": "node scripts/db-reset.mjs"
+    "db:reset": "node scripts/db-reset.mjs",
+    "spike:s3": "vite-node --config vitest.config.ts scripts/spike-s3-qr.ts"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
     "@types/pg": "^8.23.1",
+    "@types/qrcode": "^1.5.6",
+    "qrcode": "^1.5.4",
     "typescript": "^5.7.0",
+    "vite-node": "^6.0.0",
     "vitest": "^3.2.4"
   },
   "dependencies": {
