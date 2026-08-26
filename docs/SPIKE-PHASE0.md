@@ -19,6 +19,8 @@
 
 ## สิ่งที่ต้องสมัครก่อน (agent ทำแทนไม่ได้ทั้งหมด)
 
+ขั้นตอนเต็มทีละหน้าจออยู่ที่ **`docs/SETUP-LINE-OA.md`** — สรุปย่อ:
+
 1. **LINE Developers** — https://developers.line.biz/console/
    สร้าง provider → สร้าง channel แบบ **Messaging API** → ได้ `channelId`, `channelSecret`,
    `channelAccessToken` (ออก token แบบ long-lived ในหน้า Messaging API)
@@ -62,7 +64,13 @@ curl -i -H "Authorization: Bearer $CHANNEL_ACCESS_TOKEN" \
 | body ที่ได้ (ตัด `pictureUrl` ออกได้) | _ยังไม่ได้ทำ_ |
 | คนที่ทดสอบเป็นเพื่อนกับบอทหรือยัง | _ยังไม่ได้ทำ_ |
 | OA verified หรือยัง | _ยังไม่ได้ทำ_ |
-| `getGroupMemberIds` (`/members/ids`) ได้ผลว่าอย่างไร | _ยังไม่ได้ทำ_ |
+| `getGroupMemberIds` (`/members/ids`) ได้ผลว่าอย่างไร | เอกสาร LINE ระบุแล้วว่าเฉพาะ verified/premium — ยิงเพื่อยืนยันก็ได้ แต่ไม่ใช่คำถามเปิด |
+
+เอกสาร LINE ไม่ได้ระบุข้อจำกัด verified/premium ไว้กับ endpoint โปรไฟล์รายคน (ต่างจาก
+`/members/ids` ที่ระบุไว้ชัด) — จึงยังเป็นคำถามเปิดที่ต้องยิงจริง
+
+อีกข้อที่เอกสารระบุไว้และกระทบ D10 ตรงๆ: ถ้าผู้ใช้ไม่ได้ให้ consent เข้าถึงโปรไฟล์
+webhook จะ **ไม่มี `userId`** มาให้เลย — ระบบต้องรับสภาพนั้นได้ ไม่ใช่แค่เคส API ตอบ error
 
 **ถ้า 200 พร้อม `displayName`** → D10 เดินตามแผนเดิม
 **ถ้า 403/404** → auto-suggest ใช้ไม่ได้ ต้องให้คนพิมพ์ชื่อตัวเองตอน claim → **แก้ D10 ใน DESIGN.md**
