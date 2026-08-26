@@ -26,19 +26,24 @@
 
 ---
 
-## ขั้นที่ 1 — Business ID
+## ขั้นที่ 1 — สมัคร Business ID + สร้าง LINE Official Account
 
-1. เข้า https://account.line.biz/login
-2. สมัคร Business ID ด้วย **บัญชี LINE ส่วนตัว** (แนะนำ) หรืออีเมล
+**Business ID ไม่ใช่ขั้นตอนแยก** — สมัครตอน login ครั้งแรกในหน้าเดียวกัน
 
-ใช้บัญชี LINE ส่วนตัวจะสะดวกกว่า เพราะตอนทดสอบ S1/S2 ต้องเชิญบอทเข้ากลุ่มที่ตัวเองอยู่
+เข้าทางใดทางหนึ่ง (ยืนยันแล้วว่าใช้ได้ทั้งคู่ 2026-08-26):
 
----
+| ทาง | URL | ได้อะไร |
+|---|---|---|
+| เว็บ LINE for Business ไทย | https://lineforbusiness.com/th/ | มีปุ่ม `สร้างบัญชีทางการฟรี` / `Create a LINE Official Account for free` |
+| เข้า OA Manager ตรงๆ | https://manager.line.biz/ | เด้งไปหน้า login Business ID แล้วสร้างบัญชีต่อจากตรงนั้น |
 
-## ขั้นที่ 2 — สร้าง LINE Official Account
+> `https://account.line.biz/login` **ใช้ไม่ได้** — อย่าเสียเวลากับ URL นี้
 
-1. เข้า https://manager.line.biz/
-2. กดสร้างบัญชีใหม่ แล้วกรอกฟอร์ม
+1. กด `Create a LINE Official Account for free`
+2. **Log in to Business ID** — เลือก `Log in with LINE account` (ใช้บัญชี LINE ส่วนตัว
+   สะดวกกว่า เพราะ S1/S2 ต้องเชิญบอทเข้ากลุ่มที่ตัวเองอยู่) หรือสมัครด้วยอีเมล
+3. กรอกฟอร์มสร้างบัญชี แล้วกด `Continue`
+4. หน้า `Check application` → กด `Submit`
 
 | ช่อง | ใส่อะไร |
 |---|---|
@@ -46,8 +51,16 @@
 | ประเภทธุรกิจ | อะไรก็ได้ ไม่มีผลกับ API |
 | ประเทศ/ภูมิภาค | **ไทย** — มีผลกับโควตาข้อความและเรื่องพร้อมเพย์ |
 
-ได้ **บัญชีฟรี (Unverified)** มา — ยังไม่มีโล่ ยังไม่ต้องสมัคร verified ตอนนี้
-(ดูขั้นที่ 8 ว่าโล่มีผลกับอะไร)
+ได้ **บัญชีฟรี (Unverified)** มา — แผนฟรีให้ส่งข้อความ 500 ข้อความ/เดือน
+ยังไม่มีโล่ ยังไม่ต้องสมัคร verified ตอนนี้ (ดูขั้นที่ 8 ว่าโล่มีผลกับอะไร)
+
+---
+
+## ขั้นที่ 2 — เข้า LINE Official Account Manager
+
+https://manager.line.biz/ → เลือกบัญชีที่เพิ่งสร้าง
+
+หน้านี้คือที่ตั้งค่าทุกอย่างในขั้น 3–5
 
 ---
 
@@ -184,8 +197,7 @@ Developers Console → channel เดิม → แท็บ `LIFF` → `Add`
 
 ## เช็กลิสต์ก่อนเริ่ม spike
 
-- [ ] Business ID สมัครแล้ว
-- [ ] LINE OA สร้างแล้ว ประเทศ = ไทย
+- [ ] Business ID + LINE OA สร้างแล้ว ประเทศ = ไทย
 - [ ] Messaging API เปิดแล้ว มี provider
 - [ ] Greeting + Auto-reply **ปิด** · Webhooks **เปิด**
 - [ ] `Allow bot to join group chats` เปิด
@@ -201,3 +213,5 @@ Developers Console → channel เดิม → แท็บ `LIFF` → `Add`
 - [Building a bot](https://developers.line.biz/en/docs/messaging-api/building-bot/)
 - [Group chats and multi-person chats](https://developers.line.biz/en/docs/messaging-api/group-chats/)
 - [Get user IDs](https://developers.line.biz/en/docs/messaging-api/getting-user-ids/)
+- [Creating new LINE official accounts](https://help.line.me/official_account/web/categoryId/20010172/pc?lang=en&contentId=20013134)
+- [About Business ID](https://help2.line.me/business_id/web/pc?lang=en)
