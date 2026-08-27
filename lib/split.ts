@@ -3,8 +3,8 @@
  *
  * invariant: Σ share.amountSatang === grandTotal เป๊ะเสมอ ทุกโหมด ทุกอินพุต
  */
-import { distribute } from './money.js'
-import type { Item, MemberId, Participant, Share, SplitInput } from './types.js'
+import { distribute } from './money'
+import type { Item, MemberId, Participant, Share, SplitInput } from './types'
 
 /**
  * ขอบเขตของ `surchargePct` — ตรงกับคอลัมน์ `surcharge_pct numeric(5,2)`

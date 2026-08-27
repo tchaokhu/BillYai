@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
@@ -16,12 +19,18 @@
     "@types/node": "^24.0.0",
     "@types/pg": "^8.23.1",
     "@types/qrcode": "^1.5.6",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.5",
     "qrcode": "^1.5.4",
     "typescript": "^5.7.0",
     "vite-node": "^6.0.0",
     "vitest": "^3.2.4"
   },
   "dependencies": {
-    "pg": "^8.23.0"
+    "@line/liff": "^2.30.0",
+    "next": "^16.3.3",
+    "pg": "^8.23.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
   }
 }

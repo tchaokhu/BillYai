@@ -1,4 +1,4 @@
-import type { BotCommand, DraftParticipant, ParseResult } from '../types.js'
+import type { BotCommand, DraftParticipant, ParseResult } from '../types'
 
 /** คำสั่งคำเดียว — ต้องตรงทั้งข้อความ (หลัง trim) ไม่งั้นถือว่าไม่เข้า Trigger */
 const COMMANDS: ReadonlyMap<string, BotCommand> = new Map([

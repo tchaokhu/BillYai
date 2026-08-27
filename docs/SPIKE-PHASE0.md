@@ -95,8 +95,9 @@ webhook จะ **ไม่มี `userId`** มาให้เลย — ระ�
 
 ### ขั้นตอน
 
-1. deploy หน้า html เปล่าที่เรียก `liff.init()` แล้วมีปุ่มเรียก `liff.sendMessages()`
-   (ยังไม่ต้องมีระบบอะไรเลย หน้าเดียวพอ)
+1. deploy หน้าที่เรียก `liff.init()` แล้วมีปุ่มเรียก `liff.sendMessages()`
+   — **ทำแล้ว** `app/liff/spike/page.tsx` (M3) · ต้องสร้าง LIFF app แล้วติ๊ก scope
+   `chat_message.write` ก่อน ขั้นตอนอยู่ที่ `docs/SETUP-DEPLOY.md` §4
 2. เอา LIFF URL (`https://liff.line.me/<liffId>`) ไปวางในแชท**กลุ่ม** แล้วกดจากในกลุ่ม
 3. กดปุ่มส่ง แล้วสังเกต
 
@@ -182,15 +183,17 @@ payload ที่สคริปต์พิมพ์ออกจอ **ปิด
 ### ขั้นตอน
 
 1. deploy route ที่ทำงานเหมือนของจริงให้ครบเส้น: verify signature → query Supabase หนึ่งครั้ง → ตอบ 200
+   — **ทำแล้ว** `app/api/line/webhook/route.ts` (M3) ขั้นตอน deploy อยู่ที่ `docs/SETUP-DEPLOY.md`
 2. **ปล่อยทิ้งไว้อย่างน้อย 30 นาที** ให้ทั้ง function และ Supabase free เย็นจริง (free tier พัก DB เอง)
-3. วัดจากเครื่องนอก:
+3. วัดจากเครื่องนอก — **คำสั่งเต็มอยู่ใน `docs/SETUP-DEPLOY.md` §5**
 
-```bash
-for i in 1 2 3 4 5; do
-  curl -s -o /dev/null -w "%{time_total}\n" -X POST "$WEBHOOK_URL" \
-    -H "x-line-signature: dummy" -d '{"events":[]}'
-done
-```
+**ต้องเซ็นลายเซ็นให้ถูกต้อง** ห้ามส่ง `x-line-signature: dummy` แบบที่ร่างแรกของเอกสารนี้
+เขียนไว้ เพราะ route ปฏิเสธตั้งแต่ก่อนแตะ DB (ซึ่งเป็นพฤติกรรมที่ถูก — ไม่งั้นใครก็ปลุก
+Supabase free ให้หมดโควตาได้) ตัวเลขที่ได้จะเป็น cold start ของ function ล้วน **ไม่รวม
+เวลาปลุก DB** ซึ่งเป็นครึ่งหนึ่งของคำถาม
+
+route ตอบ header `Server-Timing: db;dur=… total;dur=…` — เวลาฝั่ง server ล้วน เอาไปลบ
+ออกจาก `time_total` ของ curl แล้วได้ค่าเน็ต + cold start ของ function แยกกัน
 
 ครั้งแรกคือ cold ที่เหลือคือ warm · ทำซ้ำอีกรอบหลังทิ้งไว้ 30 นาทีเพื่อยืนยันว่าไม่ใช่ฟลุ๊ก
 

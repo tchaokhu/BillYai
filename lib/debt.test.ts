@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { computeDebts, floatOf } from './debt.js'
-import type { ExpenseForDebt, SettlementForDebt } from './types.js'
+import { computeDebts, floatOf } from './debt'
+import type { ExpenseForDebt, SettlementForDebt } from './types'
 
 describe('computeDebts', () => {
   it('บิลเดียว คนจ่ายไม่ร่วมหาร — ทุกคนติดคนจ่าย', () => {

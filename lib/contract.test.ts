@@ -5,10 +5,10 @@
  * เป็นชุดกันถอยหลัง ห้ามลบ — ถ้าไฟล์นี้แดง แปลว่าสัญญาของโดเมนถูกละเมิด
  */
 import { describe, expect, it } from 'vitest'
-import { distribute, bahtToSatang } from './money.js'
-import { computeDebts } from './debt.js'
-import { splitExpense } from './split.js'
-import { parseMessage } from './parser/rules.js'
+import { distribute, bahtToSatang } from './money'
+import { computeDebts } from './debt'
+import { splitExpense } from './split'
+import { parseMessage } from './parser/rules'
 
 describe('money — invariant ที่ห้ามพัง', () => {
   it('ผลรวมตรงเป๊ะทุกกรณี สุ่ม 5000 รอบ', () => {
