@@ -7,3 +7,7 @@ dist/
 
 # ผลลัพธ์ spike — QR มีเบอร์พร้อมเพย์จริงอยู่ในนั้น
 spike-out/
+
+# Next.js / Vercel build artefacts
+*.tsbuildinfo
+.vercel/

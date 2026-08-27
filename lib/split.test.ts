@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { addSurcharge, splitExpense } from './split.js'
-import type { Item, SplitInput, SplitMode } from './types.js'
+import { addSurcharge, splitExpense } from './split'
+import type { Item, SplitInput, SplitMode } from './types'
 
 /** อินพุตพื้นฐาน — เทสต์แต่ละตัวทับเฉพาะ field ที่สนใจ */
 function input(over: Partial<SplitInput> = {}): SplitInput {

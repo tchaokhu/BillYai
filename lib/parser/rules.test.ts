@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parseMessage } from './rules.js'
+import { parseMessage } from './rules'
 
 describe('Trigger filter — ข้อความที่ bot ไม่สนใจต้องคืน null', () => {
   it('ข้อความธรรมดาคืน null', () => {

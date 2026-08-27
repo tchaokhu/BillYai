@@ -3,7 +3,7 @@ import type {
   MemberId,
   PairDebt,
   SettlementForDebt,
-} from './types.js'
+} from './types'
 
 /**
  * ยอดสุทธิของคู่หนึ่งคู่ เก็บในทิศทางเดียวเสมอ: บวก = `loId` ติด `hiId`

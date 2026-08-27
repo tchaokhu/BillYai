@@ -1,0 +1,80 @@
+# Gate on the tests that already exist. Nothing new is asserted here — this
+# only makes `main` unable to accept a change that breaks them.
+#
+# The database tests run against a real Postgres, not a mock, for the same
+# reason docker-compose.yml exists: a mock cannot tell you whether a check
+# constraint fires. Skipping them in CI would leave 295 of the project's 568
+# tests unenforced, which are exactly the ones covering money in storage.
+
+name: ci
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main, dev]
+
+# A second push to the same branch makes the first run pointless.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        # Same image and credentials as docker-compose.yml, and the same odd
+        # port, so DATABASE_URL keeps its default and db-reset.mjs still sees
+        # `localhost` — its guard refuses any host that is not obviously local.
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: billyai
+          POSTGRES_PASSWORD: billyai
+          POSTGRES_DB: billyai
+        ports:
+          - 54331:5432
+        options: >-
+          --health-cmd "pg_isready -U billyai -d billyai"
+          --health-interval 3s
+          --health-timeout 3s
+          --health-retries 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - run: npm ci
+
+      - name: typecheck
+        run: npx tsc --noEmit
+
+      - name: unit tests
+        run: npm test
+
+      - name: database tests
+        run: |
+          npm run db:reset
+          npm run test:db
+
+      # Catches what tsc cannot: a route that fails to compile under the
+      # bundler's own resolver. That is the exact failure that forced the
+      # .js import specifiers out of lib/ in the first place.
+      - name: build
+        run: npm run build
+
+      # The rules M1 set and every milestone since has kept. `any` and a
+      # forgotten `.skip` both pass tsc and both hollow out the suite.
+      - name: no debris in lib/ and app/
+        run: |
+          if grep -rnE ': any|<any>|console\.log|\.skip\(' lib app \
+               --include='*.ts' --include='*.tsx'; then
+            echo 'พบ any / console.log / .skip ที่ค้างอยู่'
+            exit 1
+          fi
+          echo 'lib/ + app/ สะอาด'
