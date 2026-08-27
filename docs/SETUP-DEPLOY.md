@@ -79,7 +79,22 @@ https://<โดเมนที่ Vercel ให้>/api/line/webhook
 
 ## 4. สร้าง LIFF app (ต้องมีก่อนทำ S2)
 
-LINE Developers Console → channel เดิม → แท็บ **LIFF** → **Add**
+**Messaging API channel เพิ่ม LIFF ไม่ได้แล้ว** — LINE ปิดทางนี้ไป ต้องสร้าง **LINE Login
+channel** ขึ้นมาต่างหากแล้วเพิ่ม LIFF ที่นั่น (`https://developers.line.biz/en/docs/liff/registering-liff-apps/`)
+
+> **Login channel ต้องอยู่ใน provider เดียวกับ Messaging API channel**
+>
+> เอกสาร LINE ระบุว่า `userId` ไม่ซ้ำกันในระดับ **provider** ไม่ใช่ระดับ channel
+> ("the user ID is only unique to an individual provider") ถ้าสร้างคนละ provider
+> คนคนเดียวกันจะได้ `userId` คนละตัวจาก LIFF กับจาก webhook แล้ว D4 (claim ตัวตน)
+> กับ D10 (auto-suggest ชื่อ) พังทั้งคู่ — พังแบบเงียบ ไม่มี error อะไรฟ้อง
+> มันจะแค่หาคนไม่เจอ
+
+```
+Console → Providers → เข้า provider เดิม (ตัวที่มี channel ของ OA)
+  → Create a new channel → LINE Login → App types ติ๊ก Web app
+  → channel ที่เพิ่งสร้าง → แท็บ LIFF → Add
+```
 
 | ช่อง | ค่า |
 |---|---|
@@ -88,6 +103,13 @@ LINE Developers Console → channel เดิม → แท็บ **LIFF** → *
 | Endpoint URL | `https://<โดเมน>/liff/spike` |
 | Scopes | ติ๊ก `profile`, `openid`, **`chat_message.write`** |
 | Module mode | ปิด |
+
+LIFF กำลังถูก rebrand เป็น LINE MINI App แต่ **LINE MINI App channel สร้างได้เฉพาะ
+service area ญี่ปุ่น/ไต้หวัน** — ไทยยังต้องใช้ LIFF ตามเดิม และของที่สร้างไว้ใช้ต่อได้
+
+**กระทบ Phase 2:** D15 ให้ verify LIFF ID token ฝั่ง server ทุก request · token นั้นออกโดย
+**Login channel** ไม่ใช่ Messaging API channel ดังนั้น `aud` ที่ต้องตรวจคือ channel ID ของ
+Login channel — ต้องเพิ่ม env อีกตัวตอนทำจริง
 
 `chat_message.write` คือตัวที่ทำให้ `liff.sendMessages()` ทำงานได้ — **ไม่ติ๊ก = S2 ตกทันที**
 
