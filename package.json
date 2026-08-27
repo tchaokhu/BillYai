@@ -13,7 +13,8 @@
     "test:db": "vitest run --config vitest.db.config.ts",
     "test:all": "npm test && npm run test:db",
     "db:reset": "node scripts/db-reset.mjs",
-    "spike:s3": "vite-node --config vitest.config.ts scripts/spike-s3-qr.ts"
+    "spike:s3": "vite-node --config vitest.config.ts scripts/spike-s3-qr.ts",
+    "spike:s4": "vite-node --config vitest.config.ts scripts/spike-s4-coldstart.ts"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

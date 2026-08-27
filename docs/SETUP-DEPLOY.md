@@ -123,31 +123,22 @@ Login channel — ต้องเพิ่ม env อีกตัวตอนท
 ไม่รวมเวลาปลุก Supabase ซึ่งเป็นครึ่งหนึ่งของคำถาม
 
 ```powershell
-# ตั้งค่าครั้งเดียวต่อเทอร์มินัล — ห้ามพิมพ์ secret ลงบทสนทนา
+# ตั้งครั้งเดียวต่อเทอร์มินัล — ห้ามพิมพ์ secret ลงบทสนทนา ห้ามรันผ่าน ! ในแชท
 $env:LINE_CHANNEL_SECRET = "<channel secret>"
-$url = "https://<โดเมน>/api/line/webhook"
 
-# เขียน body ลงไฟล์แล้วเซ็น "ไบต์ชุดเดียวกับที่ curl จะส่ง" — ห้ามส่ง body เป็น
-# อาร์กิวเมนต์ เพราะ Windows PowerShell 5.1 **กลืนเครื่องหมาย " ตอนส่งต่อให้ .exe**
-# ค่าที่ curl ส่งจริงจะกลายเป็น {events:[]} ซึ่งไม่ตรงกับที่เซ็นไว้ แล้วได้ 401 ทุกครั้ง
-$bodyPath  = Join-Path $env:TEMP "billyai-s4-body.json"
-$bodyBytes = [Text.Encoding]::UTF8.GetBytes('{"events":[]}')
-[IO.File]::WriteAllBytes($bodyPath, $bodyBytes)
-
-$hmac = [System.Security.Cryptography.HMACSHA256]::new([Text.Encoding]::UTF8.GetBytes($env:LINE_CHANNEL_SECRET))
-$sig  = [Convert]::ToBase64String($hmac.ComputeHash($bodyBytes))
-
-# ยิงครั้งเดียวก่อนเพื่อ "พิสูจน์ว่าลายเซ็นผ่าน" — ต้องได้ 200 ไม่ใช่ 401
-# ถ้าได้ 401 ตรงนี้ อย่าเพิ่งวัดเวลา ตัวเลขจะไม่รวมเวลาปลุก DB
-curl.exe -s -D - -o NUL -X POST $url `
-  -H "x-line-signature: $sig" -H "content-type: application/json" --data-binary "@$bodyPath"
-
-# ครั้งแรก = cold ที่เหลือ = warm
-1..5 | ForEach-Object {
-  curl.exe -s -o NUL -w "%{time_total}s  http=%{http_code}`n" -X POST $url `
-    -H "x-line-signature: $sig" -H "content-type: application/json" --data-binary "@$bodyPath"
-}
+npm run spike:s4 -- https://<โดเมน>/api/line/webhook
 ```
+
+สคริปต์เซ็น body เอง ยิง 5 ครั้ง แล้วแยกเวลาให้เป็น 4 ช่อง: `wall` (ที่เครื่องเราจับได้)
+`server` (จาก `Server-Timing` ของ route) `db` (เฉพาะที่รอ Supabase) และส่วนต่างซึ่งคือ
+เน็ต + เวลาที่ Vercel ปลุก function ก่อนโค้ดเราได้เริ่มทำงาน
+
+ถ้าไม่ได้ 200 ครบทุกครั้ง มันจะไม่พิมพ์สรุป และคืน exit code 1 — ตัวเลขจากชุดที่ 401
+ใช้สรุปอะไรไม่ได้เลย จึงไม่ควรมีให้หยิบไปกรอก
+
+**อย่ายิง body เป็นอาร์กิวเมนต์ของ `curl.exe` เอง** Windows PowerShell 5.1 กลืน
+เครื่องหมาย `"` ตอนส่งต่อให้โปรแกรมภายนอก `'{"events":[]}'` จะกลายเป็น `{events:[]}`
+ซึ่งไม่ตรงกับไบต์ที่เซ็นไว้ แล้วได้ 401 ทุกครั้งโดยดูไม่ออกว่าเพราะอะไร
 
 **ก่อนวัดต้องปล่อยทิ้งไว้อย่างน้อย 30 นาที** ให้ทั้ง Vercel function และ Supabase free
 เย็นจริง แล้ววัดซ้ำอีกรอบหลังทิ้งไว้อีก 30 นาทีเพื่อยืนยันว่าไม่ใช่ฟลุ๊ก
