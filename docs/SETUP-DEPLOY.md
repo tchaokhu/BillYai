@@ -46,11 +46,11 @@
 
    | ชื่อ | ค่า | ใส่ที่ environment ไหน |
    |---|---|---|
-   | `DATABASE_URL` | connection string แบบ pooler พอร์ต 6543 | Production + Preview |
-   | `DB_POOL_MAX` | `2` | Production + Preview |
-   | `LINE_CHANNEL_SECRET` | channel secret จาก LINE Developers Console | Production + Preview |
-   | `PROMPTPAY_KEY` | 32 ไบต์สุ่ม base64 (คนละค่ากับที่ใช้บนเครื่อง) | Production + Preview |
-   | `NEXT_PUBLIC_LIFF_ID` | ได้จากข้อ 4 — กลับมาใส่ทีหลังแล้ว redeploy | Production + Preview |
+   | `DATABASE_URL` | connection string แบบ pooler พอร์ต 6543 | Production |
+   | `DB_POOL_MAX` | `2` | Production |
+   | `LINE_CHANNEL_SECRET` | channel secret จาก LINE Developers Console | Production |
+   | `PROMPTPAY_KEY` | 32 ไบต์สุ่ม base64 (คนละค่ากับที่ใช้บนเครื่อง) | Production |
+   | `NEXT_PUBLIC_LIFF_ID` | ได้จากข้อ 4 — กลับมาใส่ทีหลังแล้ว redeploy | Production |
 
    `NEXT_PUBLIC_*` ถูกฝังลง bundle ฝั่ง client ตอน build — **ห้ามเอา secret ใส่ชื่อขึ้นต้นแบบนี้เด็ดขาด**
    และแก้ค่าแล้วต้อง redeploy ถึงจะมีผล (ต่างจาก env ฝั่ง server ที่อ่านตอน runtime)
@@ -59,6 +59,120 @@
    `vercel.json` ตั้งไว้ให้แล้ว แต่ยืนยันด้วยตาอีกที เพราะค่านี้ตัดสินตัวเลขของ S4 ทั้งหมด
 
 5. โครง branch ตรงกับที่วางไว้: `main` → production, `dev` → preview URL ของตัวเอง
+
+---
+
+## 2.5 Preview environment — ต่อ DB คนละก้อนกับ production
+
+**อย่าเอา `DATABASE_URL` ของ production ใส่ Preview** repo นี้เป็น public · Vercel ฉีด
+Preview env เข้า deployment ที่ build จาก PR ทุกอัน ดังนั้น PR ที่แก้โค้ดให้พิมพ์
+`process.env` ออกมา หรือให้ SELECT ทั้งตาราง ก็ได้ทั้งคีย์และข้อมูลจริงไปฟรีๆ
+โดยที่ไม่ต้องได้สิทธิ์เขียน repo เลยสักนิด
+
+### 0) ทำไมไม่ใช้ Supabase Branching
+
+Supabase มีฟีเจอร์ Branching ที่สร้าง instance แยกต่อ PR แล้วรัน `supabase/migrations/`
+ให้เอง ซึ่งตรงกับปัญหานี้กว่าการสร้าง project ที่สองมือเปล่าทุกประการ — **แต่มันเป็น
+ฟีเจอร์ของแผน Pro** ($25/เดือน) บวก **$0.01344 ต่อ branch ต่อชั่วโมง** (Micro compute
+≈ $0.32/วัน) · Free plan ใช้ไม่ได้ แต่ให้ **2 active project** ซึ่งพอดีกับที่ต้องการ
+
+ที่ไม่เอาตอนนี้เพราะข้อได้เปรียบของมันทั้งสามข้อยังไม่มีข้อไหนออกฤทธิ์: dev คนเดียว
+PR ทีละอัน branch เดียว และ migration ยังมีไฟล์เดียว — รันมือครั้งเดียวจบ
+
+**ให้กลับมาดูใหม่เมื่อ** migration เริ่มหลายไฟล์จนการรันมือมีโอกาสทำ schema ของสอง
+project เพี้ยนกัน (ซึ่งเป็นความเสี่ยงข้อเดียวของทางที่เลือกไว้ข้างล่างนี้) หรือเมื่อมี
+หลาย PR พร้อมกัน หรือเมื่อขึ้น Pro ด้วยเหตุผลอื่นอยู่แล้ว
+
+### 1) Supabase project ที่สอง
+
+`New project` ชื่ออะไรก็ได้ที่แยกออก (เช่น `billyai-dev`) · **region ต้อง
+`Southeast Asia (Singapore) ap-southeast-1` เหมือนตัว production** ไม่ใช่เพราะความเร็ว
+แต่เพราะถ้า preview วิ่งบน latency คนละชุด ตัวเลขที่วัดได้จาก preview จะเอามาเทียบกับ
+S4 ไม่ได้ แล้ว preview ก็หมดประโยชน์ในฐานะที่ซ้อมก่อนขึ้นจริง
+
+รัน migration ตัวเดียวกัน — schema ต้องตรงกัน ไม่งั้น preview ผ่านแล้ว production พัง
+ซึ่งเป็นสิ่งเดียวที่ preview มีไว้กัน:
+
+**ตั้งรหัสผ่านเองเป็น hex ล้วน** ตอนสร้าง project — รหัสที่ Supabase สุ่มมามี `@ / ? # "` ได้
+ซึ่งพังสองที่: `@` ทำให้ libpq ตัด host ผิดตำแหน่งแล้ว error พูดเรื่อง host resolve ไม่ได้
+โดยไม่มีอะไรบอกว่าต้นเหตุคือรหัสผ่าน · `"` โดน PowerShell 5.1 กลืนตอนส่งต่อให้ .exe
+
+```powershell
+node -e "console.log(require('crypto').randomBytes(24).toString('hex'))"
+```
+
+**ทางที่สั้นที่สุด: วางเนื้อ `supabase/migrations/0001_init.sql` (213 บรรทัด) ลง SQL Editor
+แล้วกด Run** — ไม่ต้องลง `psql` ไม่ต้องเอารหัสผ่านผ่านเทอร์มินัล ไม่มีปัญหา encoding
+
+ถ้าอยากได้แบบทำซ้ำได้ `billyai-db` (`postgres:17-alpine`) มี `psql` ติดมาอยู่แล้ว:
+
+```powershell
+docker cp supabase/migrations/0001_init.sql billyai-db:/tmp/0001_init.sql
+docker exec -e PGPASSWORD='<รหัสผ่าน>' billyai-db psql "<connection string>" -f /tmp/0001_init.sql
+```
+
+ใช้ `docker cp` + `-f` ไม่ใช่ pipe เพราะ **PowerShell 5.1 ไม่รองรับ `<` redirect** (ขึ้น
+`The '<' operator is reserved for future use.`) และ `Get-Content |` ทำ UTF-8 เพี้ยนตอนส่งให้ .exe
+
+ตรวจว่าครบด้วย SQL Editor — ต้องได้ **10**:
+
+```sql
+select count(*) from information_schema.tables where table_schema = 'public';
+```
+
+ไฟล์นี้ไม่มี `if not exists` — รันซ้ำได้ `already exists` แปลว่าของขึ้นแล้ว ไม่ใช่พัง
+
+connection string เอาจาก **Connect → Shared Pooler → Transaction → พอร์ต 6543**
+**copy จากหน้าเว็บ อย่าพิมพ์เอง** — prefix host เป็น `aws-0-` หรือ `aws-1-` แล้วแต่ project
+
+> **กฎที่ต้องถือตั้งแต่วันนี้:** migration ใหม่ทุกไฟล์ต้องรันใส่ **ทั้งสอง project ตามลำดับเดียวกัน**
+> `lib/db/schema.db.test.ts` เฝ้า schema ให้เฉพาะ Postgres ใน Docker ที่ CI รัน — **มันไม่เคยเห็น
+> Supabase ทั้งสองตัว** ถ้าสอง project เพี้ยนกัน จะไม่มีเทสต์ไหนจับได้ อาการที่ได้คือ preview ผ่าน
+> แล้ว production พัง ซึ่งเป็นสิ่งเดียวที่ preview มีไว้กัน
+
+### 2) `PROMPTPAY_KEY` คนละตัว
+
+```powershell
+node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+```
+
+คีย์คนละตัวได้**ก็เพราะ**ใช้ DB คนละก้อน — `promptpay_cipher` เป็น AES-256-GCM
+(`lib/crypto/promptpay.ts`) ถ้าวันไหนย้อนกลับไปใช้ DB ร่วมกันเมื่อไหร่ คีย์ต้องกลับมา
+เป็นตัวเดียวกันทันที ไม่งั้น `decryptPromptPay` โยน
+`ถอดรหัสเบอร์ PromptPay ไม่สำเร็จ — ข้อมูลถูกแก้ไข หรือคีย์ไม่ตรงกับตอนเข้ารหัส`
+ซึ่งเป็นข้อความเดียวกับตอนข้อมูลถูกแก้ แยกไม่ออกว่าอันไหน
+
+### 3) ใส่ลง Vercel — Environment = **Preview** และ **จำกัด branch เป็น `dev`**
+
+Vercel ให้ผูก env var กับ branch ได้ ตั้งเป็น `dev` แล้ว deployment ของ branch อื่น
+รวมถึง PR จากคนนอก จะไม่ได้ค่าพวกนี้ติดไปเลย · เป็นด่านที่สอง ไม่ใช่ด่านเดียว
+(ด่านแรกคือ DB คนละก้อนตามข้อ 1)
+
+| ชื่อ | ค่าสำหรับ Preview |
+|---|---|
+| `DATABASE_URL` | pooler ของ project **ที่สอง** พอร์ต 6543 |
+| `DB_POOL_MAX` | `2` |
+| `PROMPTPAY_KEY` | คีย์ใหม่จากข้อ 2 |
+| `NEXT_PUBLIC_LIFF_ID` | ค่าเดียวกับ production ได้ (ไม่ใช่ secret) · visibility ต้องเป็น `config` |
+| `LINE_CHANNEL_SECRET` | **ยังไม่ต้องใส่** — ดูข้อ 4 |
+
+### 4) `LINE_CHANNEL_SECRET` บน Preview ยังไม่ตั้ง เพราะยังไม่มีค่าที่ถูกให้ตั้ง
+
+secret ของ production ใส่ไม่ได้ด้วยเหตุผลข้อบนสุด · ใส่ค่ามั่วก็ไม่ได้อะไร เพราะ
+`X-Line-Signature` จะไม่ตรงแล้ว `POST /api/line/webhook` ตอบ 401 ทุกครั้ง ซึ่งทดสอบอะไรไม่ได้
+
+ถ้าวันไหนอยากยิง webhook จริงใส่ preview ก่อน merge ทางที่ถูกคือสร้าง **Messaging API
+channel ตัวที่สอง** (OA สำหรับ dev) ใน provider เดียวกัน แล้วเอา secret ของ channel นั้น
+มาใส่ Preview — ชี้ webhook ของมันไปที่ **branch URL ของ `dev`** ซึ่งอยู่กับที่
+(`https://bill-yai-git-dev-<scope>.vercel.app`) ไม่ใช่ URL ต่อ deployment ที่เปลี่ยนทุกครั้ง
+
+ระหว่างที่ยังไม่ตั้ง preview build ไม่พัง — env ทุกตัวถูกอ่านตอน runtime ไม่ใช่ตอน import
+(`getPool()` ใน `lib/db/client.ts`, `loadKey()` ใน `lib/crypto/promptpay.ts`) จงใจเขียนไว้แบบนั้น
+
+### 5) ปิดทางที่เหลือ
+
+Vercel → Settings → Git → **ห้ามเปิด deploy อัตโนมัติให้ PR จาก fork ของคนนอก**
+ค่า default ของ Vercel ต้องกด authorize ก่อนอยู่แล้ว **อย่าปิดของกันนี้**
 
 ---
 
