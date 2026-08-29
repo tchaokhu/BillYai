@@ -169,6 +169,15 @@ channel ตัวที่สอง** (OA สำหรับ dev) ใน provide
 ระหว่างที่ยังไม่ตั้ง preview build ไม่พัง — env ทุกตัวถูกอ่านตอน runtime ไม่ใช่ตอน import
 (`getPool()` ใน `lib/db/client.ts`, `loadKey()` ใน `lib/crypto/promptpay.ts`) จงใจเขียนไว้แบบนั้น
 
+> **กับดักที่รออยู่:** preview deployment ถูก **Vercel Deployment Protection** คุ้มอยู่ตั้งแต่ต้น
+> ทุก request ที่ไม่ได้ล็อกอินได้ `302` ไป `https://vercel.com/sso-api?url=…` ไม่ใช่คำตอบของ route
+> (ยืนยันกับ deployment จริงของ `fa0d9fd` แล้ว) · ของดี ไม่ต้องปิดทิ้ง — แต่แปลว่า **LINE จะยิง
+> webhook เข้า preview URL ไม่ได้** มันจะได้หน้า login ไม่ใช่ 200 · วันที่ทำ dev OA ต้องปิด
+> protection เฉพาะ preview หรือใช้ Protection Bypass for Automation ก่อน ไม่งั้นจะนั่งดีบั๊ก
+> ลายเซ็นอยู่นานโดยที่ปัญหาไม่ได้อยู่ตรงนั้นเลย
+>
+> ผลข้างเคียงอีกข้อ: ตรวจ preview ด้วย `curl` จากข้างนอกไม่ได้ ต้องเปิดในเบราว์เซอร์ที่ล็อกอิน Vercel
+
 ### 5) ปิดทางที่เหลือ
 
 Vercel → Settings → Git → **ห้ามเปิด deploy อัตโนมัติให้ PR จาก fork ของคนนอก**
