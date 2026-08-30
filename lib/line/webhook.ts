@@ -1,25 +1,20 @@
 /**
  * ตัวจัดการ webhook ของ LINE ที่**ไม่รู้จัก Next.js** — รับสตริงกับฟังก์ชัน คืน object
  *
- * ขอบเขตรอบ M3 คือเส้นทางที่ S4 สั่งไว้เท่านั้น: verify signature → แตะ DB หนึ่งครั้ง
- * → ตอบ 200 · **ยังไม่ parse event ยังไม่จด ยังไม่ตอบกลับกลุ่ม** นั่นคือ Phase 1
+ * ขอบเขตรอบ M4: verify signature → อ่าน event → ตัดสินว่าจะตอบอะไร → ตอบกลับ
+ * **ยังไม่แตะ DB เลยสักบรรทัด** การจดบิลเป็นของ M5/M6
  *
- * DB probe รับเข้ามาเป็น dependency ไม่ได้ import repo ตรงๆ เพื่อให้เทสต์ยูนิต
- * รันได้โดยไม่ต้องมี Docker (กติกาเดิมตั้งแต่ M2)
+ * การยิง reply ฉีดเข้ามาเป็น dependency ไม่ import client ตรงๆ เพื่อให้เทสต์ยูนิต
+ * รันได้โดยไม่ยิงเน็ตและไม่ต้องมี env จริง (กติกาเดิมตั้งแต่ M2)
  */
 
+import type { ReplyOutcome } from './client'
+import { parseLineEvents, type LineEvent } from './events'
 import { verifyLineSignature } from './signature'
-
-/**
- * id ที่ใช้ถาม DB ตอนไม่มีกลุ่มให้ถาม
- *
- * `line_group_id` ของจริงจาก LINE ขึ้นต้นด้วย `C` เสมอ ค่านี้จึงไม่มีวันชนของจริง
- * และตั้งใจให้ query คืน 0 แถว — เราต้องการ **round trip** ไม่ใช่ข้อมูล
- *
- * ตอนทำ Phase 1 จริง การ probe ทิ้งแบบนี้ต้องหายไป แล้วแทนที่ด้วยการ resolve วง
- * จาก event จริง (D21: `source.type` เป็นตัวตัดสินอย่างเดียว)
- */
-const PROBE_SENTINEL = '__probe__'
+import { stripMentions } from './mention'
+import { renderReply, type LineTextMessage } from './messages'
+import { decideReply, type Surface } from '../flow/dispatch'
+import { parseAddressedMessage, parseMessage } from '../parser/rules'
 
 export interface LineWebhookRequest {
   /** ไบต์ที่มาจริง ยังไม่ผ่าน JSON.parse — ลายเซ็นคิดจากตัวนี้ */
@@ -32,44 +27,50 @@ export interface LineWebhookRequest {
 }
 
 export interface LineWebhookDeps {
-  /** อ่านวงจาก `line_group_id` — read-only เท่านั้นในรอบนี้ */
-  probeGroup: (lineGroupId: string) => Promise<unknown>
+  reply: (replyToken: string, messages: readonly LineTextMessage[]) => Promise<ReplyOutcome>
   /** นาฬิกาหน่วย ms — แยกออกมาเพื่อให้เทสต์กำหนดค่าได้ */
   now?: () => number
 }
 
 export interface LineWebhookResult {
-  status: 200 | 401 | 500
-  /** เวลาที่ใช้กับ DB — `null` เมื่อไม่ได้แตะ DB เลย (ลายเซ็นไม่ผ่าน) */
-  dbMs: number | null
+  status: 200 | 401
   totalMs: number
   /** body ผ่านลายเซ็นแต่ parse ไม่ออก */
   malformed: boolean
   retryKey: string | null
+  /** จำนวน event ที่เราพูดตอบไป (หรือพยายามพูด) */
+  replied: number
+  /**
+   * สาเหตุที่ reply ไม่ออก เรียงตาม event — ผู้เรียกเป็นคน log
+   *
+   * ค่าคงที่ล้วน ไม่มี `replyToken` ไม่มี id ของใคร: repo เป็น public และ log
+   * ไม่ควรสะสมของที่ยิงซ้ำได้ · แต่ต้องแยกสาเหตุให้ออก เพราะ `invalid-reply-token`
+   * (เราช้าไป) กับ `unauthorized` (access token ผิด) แก้คนละทางกันคนละเรื่อง
+   */
+  replyFailures: string[]
+}
+
+/** วงส่วนตัวใน 1:1 กับวงกลุ่ม เป็นคนละ surface แต่ใช้โค้ดร่วมกันทั้งหมด (D21) */
+function surfaceOf(event: LineEvent): Surface {
+  return event.source.kind === 'group' ? 'group' : 'direct'
 }
 
 /**
- * หา `groupId` ตัวแรกจากชุด event โดยไม่เชื่อรูปร่างอะไรเลย
+ * `stripMentions` ตัดเฉพาะ mention ที่เรียกบอท — ของคนอื่นอยู่ในข้อความต่อไป
+ * ไม่งั้น `@กอล์ฟ เลิก` จะเหลือ `เลิก` แล้วบอทโพล่งใส่บทสนทนาที่ไม่ได้พูดกับมัน
  *
- * body ผ่านลายเซ็นแล้วก็จริง แต่ "มาจาก LINE" ไม่ได้แปลว่า "รูปร่างตรงกับที่เราจำ" —
- * LINE เพิ่ม event type ใหม่ได้ตลอด และ `source` ของ 1:1 กับ room ไม่มี `groupId`
+ * `mentionsBot` ทำสองหน้าที่: เลือกทางเข้าของ parser และบอก `decideReply` ว่า
+ * คนพูดกับเราอยู่ ซึ่งทำให้กฎเงียบไม่มีผลกับข้อความนั้น
  */
-function firstGroupId(payload: unknown): string | null {
-  if (typeof payload !== 'object' || payload === null) return null
-
-  const events = (payload as { events?: unknown }).events
-  if (!Array.isArray(events)) return null
-
-  for (const event of events) {
-    if (typeof event !== 'object' || event === null) continue
-    const source = (event as { source?: unknown }).source
-    if (typeof source !== 'object' || source === null) continue
-
-    const { type, groupId } = source as { type?: unknown; groupId?: unknown }
-    if (type === 'group' && typeof groupId === 'string' && groupId.length > 0) return groupId
+function messagesFor(event: LineEvent): LineTextMessage[] {
+  if (event.kind !== 'text') {
+    // postback มาจากการ์ดของเราเอง ซึ่งยังไม่มีในระบบจนถึง M6
+    return []
   }
 
-  return null
+  const { text, mentionsBot } = stripMentions(event.text, event.mentionees)
+  const parsed = mentionsBot ? parseAddressedMessage(text) : parseMessage(text)
+  return renderReply(decideReply({ surface: surfaceOf(event), addressed: mentionsBot }, parsed))
 }
 
 export async function handleLineWebhook(
@@ -82,13 +83,19 @@ export async function handleLineWebhook(
 
   const done = (
     status: LineWebhookResult['status'],
-    dbMs: number | null,
-    malformed = false,
-  ): LineWebhookResult => ({ status, dbMs, totalMs: now() - startedAt, malformed, retryKey })
+    extra: { malformed?: boolean; replied?: number; replyFailures?: string[] } = {},
+  ): LineWebhookResult => ({
+    status,
+    totalMs: now() - startedAt,
+    malformed: extra.malformed ?? false,
+    retryKey,
+    replied: extra.replied ?? 0,
+    replyFailures: extra.replyFailures ?? [],
+  })
 
   // ด่านแรกเสมอ — ทุกบรรทัดหลังจากนี้ทำงานให้คนที่พิสูจน์ตัวแล้วเท่านั้น
   if (!verifyLineSignature(req.rawBody, req.signature, req.channelSecret)) {
-    return done(401, null)
+    return done(401)
   }
 
   let payload: unknown
@@ -102,14 +109,32 @@ export async function handleLineWebhook(
     malformed = true
   }
 
-  const dbStartedAt = now()
-  try {
-    await deps.probeGroup(firstGroupId(payload) ?? PROBE_SENTINEL)
-  } catch {
-    // DB ล่มแล้วตอบ 200 = LINE ทิ้ง event นั้นถาวร บิลที่คนพิมพ์หายเงียบ
-    // 500 ทำให้ LINE retry ซึ่งเป็นพฤติกรรมที่ถูกต้องตอนเราเป็นฝ่ายพัง
-    return done(500, now() - dbStartedAt, malformed)
-  }
+  /**
+   * ยิงขนาน ไม่ใช่ทีละอัน — แต่ละ event มี `replyToken` ของตัวเองและไม่มีลำดับ
+   * ที่ต้องรักษา · ต่อคิวกันแปลว่า timeout หนึ่งครั้งกิน 3 วินาทีของทุก event
+   * ที่รอข้างหลัง ชุดละ 5 event = 15 วินาที ซึ่งเลยเพดานเวลาของ function และ
+   * นานพอที่ reply token ของอันหลังๆ จะหมดอายุก่อนถูกใช้
+   */
+  const sent = await Promise.all(
+    parseLineEvents(payload)
+      .map((event) => ({ event, messages: messagesFor(event) }))
+      .filter(({ messages }) => messages.length > 0)
+      .map(async ({ event, messages }) => {
+        try {
+          const outcome = await deps.reply(event.replyToken, messages)
+          return outcome.ok ? null : outcome.reason
+        } catch {
+          // reply ที่ throw ต้องไม่ทำให้ event ที่เหลือในชุดเดียวกันไม่ถูกตอบ
+          return 'threw'
+        }
+      }),
+  )
 
-  return done(200, now() - dbStartedAt, malformed)
+  const replied = sent.length
+  const replyFailures = sent.filter((reason) => reason !== null)
+
+  // **200 เสมอเมื่อผ่านลายเซ็น** (D36) — รอบนี้ไม่มีการเขียนอะไรลง DB เลย
+  // จึงไม่มีความล้มเหลวแบบที่ retry แล้วผลจะต่าง · M5/M6 ที่เริ่มเขียนจริงต้อง
+  // กลับมาตอบ 500 เมื่อพังก่อนเขียน ตามเกณฑ์ "เขียนลงไปแล้วหรือยัง"
+  return done(200, { malformed, replied, replyFailures })
 }

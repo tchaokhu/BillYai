@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { readChannelSecret } from './env'
+import { readAccessToken, readChannelSecret } from './env'
 
 const REAL = 'a1b2c3d4e5f60718293a4b5c6d7e8f90'
 
@@ -28,5 +28,25 @@ describe('readChannelSecret', () => {
     // ถ้าตัดกลางค่าด้วย เราจะแอบแก้ secret ให้ต่างจากที่ผู้ใช้ตั้งใจ
     const odd = 'aaa bbb'
     expect(readChannelSecret(` ${odd} `)).toEqual({ secret: odd, hadSurroundingWhitespace: true })
+  })
+})
+
+describe('readAccessToken — ค่าที่คนก๊อปวางจากแท็บ Messaging API', () => {
+  it('ตัดช่องว่างหัวท้ายแล้วบอกว่าเจอ', () => {
+    expect(readAccessToken('  abc123  ')).toEqual({ token: 'abc123', hadSurroundingWhitespace: true })
+    expect(readAccessToken('abc123\n')).toEqual({
+      token: 'abc123',
+      hadSurroundingWhitespace: true,
+    })
+  })
+
+  it('ค่าปกติไม่ถูกมาร์กว่าเพี้ยน', () => {
+    expect(readAccessToken('abc123')).toEqual({ token: 'abc123', hadSurroundingWhitespace: false })
+  })
+
+  it('ไม่ได้ตั้งเลย = ว่าง และไม่ใช่ความผิดเรื่องช่องว่าง', () => {
+    expect(readAccessToken(undefined)).toEqual({ token: '', hadSurroundingWhitespace: false })
+    expect(readAccessToken(null)).toEqual({ token: '', hadSurroundingWhitespace: false })
+    expect(readAccessToken('   ')).toEqual({ token: '', hadSurroundingWhitespace: false })
   })
 })

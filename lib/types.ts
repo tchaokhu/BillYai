@@ -1,7 +1,9 @@
 /**
  * สัญญากลางของ domain core — โมดูลทุกตัวคอมไพล์กับไฟล์นี้
  *
- * ห้ามแก้ไฟล์นี้ระหว่างทำโมดูล ถ้าสัญญาไม่พอให้รายงานกลับไปที่ orchestrator
+ * ข้อห้าม "ห้ามแก้ไฟล์นี้" มีขอบเขตแค่ M1–M3 ซึ่งเขียนไว้กัน agent หลายตัวแก้ไฟล์
+ * เดียวกันพร้อมกัน ไม่ใช่กฎถาวร — ตั้งแต่ Phase 1 เพิ่มของได้ แต่ต้องตั้งใจและบันทึก
+ * ไว้ใน `docs/DESIGN.md` เสมอ
  *
  * จำนวนเงินทั้งหมดในไฟล์นี้เป็น **สตางค์ (integer)** เสมอ — ไม่มี float
  * ที่ไหนในเส้นทางคำนวณเงิน ดู CONTEXT.md หัวข้อ Share
@@ -93,7 +95,11 @@ export interface ExpenseDraft {
   surchargePct: number
 }
 
-export type BotCommand = 'balance' | 'nudge' | 'edit' | 'undo'
+/**
+ * `guide` ไม่ใช่คำที่ผู้ใช้พิมพ์ — เกิดจากการ @mention บอทเปล่าๆ ซึ่งเจตนาชัดว่า
+ * เรียกบอท และเป็นที่เดียวที่คนใหม่ในกลุ่มจะได้เห็นไวยากรณ์โดยไม่มีใครสอน (D19)
+ */
+export type BotCommand = 'balance' | 'nudge' | 'edit' | 'undo' | 'guide'
 
 /**
  * `null` = ข้อความไม่เข้า Trigger — bot ไม่สนใจ ไม่เก็บ ไม่ส่ง LLM
@@ -101,5 +107,9 @@ export type BotCommand = 'balance' | 'nudge' | 'edit' | 'undo'
  */
 export type ParseResult =
   | { kind: 'expense'; draft: ExpenseDraft }
-  | { kind: 'command'; command: BotCommand }
+  /**
+   * `args` = ส่วนที่ตามหลังคำสั่ง เช่น `ยอด #เชียงใหม่` — ชั้นนี้แค่อ่านออกมา
+   * ไม่ตัดสินว่ารองรับไหม เพราะ parser ไม่รู้ว่าเฟสไหนลงของอะไรไปแล้ว (D34)
+   */
+  | { kind: 'command'; command: BotCommand; args?: string }
   | { kind: 'unparsed'; text: string }

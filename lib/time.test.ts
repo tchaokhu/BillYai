@@ -72,4 +72,14 @@ describe('bangkokDate — ขอบวันอยู่ที่ 17:00Z', () =>
     expect(() => bangkokDate(Number.POSITIVE_INFINITY)).toThrow()
     expect(() => bangkokDate(1.5)).toThrow()
   })
+
+  it('integer ที่เกินช่วงของ Date ต้องพังด้วยข้อความของเราเอง', () => {
+    // `Number.isSafeInteger` ผ่านถึง 9.007e15 แต่ `Date` รับได้แค่ ±8.64e15
+    // ปล่อยไว้จะได้ `RangeError: Invalid time value` จาก `formatToParts` แทน
+    // ซึ่งเป็น throw ที่ไม่มีใครดักในลูปตอบ reply
+    expect(() => bangkokDate(8_640_000_000_000_001)).toThrow(/epoch ms/)
+    expect(() => bangkokDate(-8_640_000_000_000_001)).toThrow(/epoch ms/)
+    // ขอบบนพอดีต้องไม่พัง (ปีของมันคือ 275760 จึงไม่ใช่สี่หลัก)
+    expect(() => bangkokDate(8_640_000_000_000_000)).not.toThrow()
+  })
 })

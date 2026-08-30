@@ -48,7 +48,8 @@
    |---|---|---|
    | `DATABASE_URL` | connection string แบบ pooler พอร์ต 6543 | Production |
    | `DB_POOL_MAX` | `2` | Production |
-   | `LINE_CHANNEL_SECRET` | channel secret จาก LINE Developers Console | Production |
+   | `LINE_CHANNEL_SECRET` | channel secret — แท็บ **Basic settings** | Production |
+   | `LINE_CHANNEL_ACCESS_TOKEN` | long-lived channel access token — แท็บ **Messaging API** คนละตัวกับ secret | Production |
    | `PROMPTPAY_KEY` | 32 ไบต์สุ่ม base64 (คนละค่ากับที่ใช้บนเครื่อง) | Production |
    | `NEXT_PUBLIC_LIFF_ID` | ได้จากข้อ 4 — กลับมาใส่ทีหลังแล้ว redeploy | Production |
 
@@ -155,6 +156,7 @@ Vercel ให้ผูก env var กับ branch ได้ ตั้งเป�
 | `PROMPTPAY_KEY` | คีย์ใหม่จากข้อ 2 |
 | `NEXT_PUBLIC_LIFF_ID` | ค่าเดียวกับ production ได้ (ไม่ใช่ secret) · visibility ต้องเป็น `config` |
 | `LINE_CHANNEL_SECRET` | **ยังไม่ต้องใส่** — ดูข้อ 4 |
+| `LINE_CHANNEL_ACCESS_TOKEN` | **ยังไม่ต้องใส่** — ผูกกับ channel เดียวกับ secret ข้างบน |
 
 ### 4) `LINE_CHANNEL_SECRET` บน Preview ยังไม่ตั้ง เพราะยังไม่มีค่าที่ถูกให้ตั้ง
 
