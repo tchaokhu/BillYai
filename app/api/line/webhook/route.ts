@@ -9,11 +9,13 @@
  * เลยสักบรรทัด** การจดบิลเป็นของ M5/M6
  */
 
-import { replyToLine } from '@/lib/line/client'
+import { fetchDisplayName, replyToLine } from '@/lib/line/client'
 import { readAccessToken, readChannelSecret } from '@/lib/line/env'
 import { handleLineWebhook, type GroupView } from '@/lib/line/webhook'
+import { confirmDraft } from '@/lib/repo/confirm'
+import { findAppUserByLineUserId } from '@/lib/repo/users'
 import { createDraft } from '@/lib/repo/drafts'
-import { findActiveGroupByLineGroupId } from '@/lib/repo/groups'
+import { findActiveGroupByLineGroupId, findPersonalGroupByOwner } from '@/lib/repo/groups'
 import { findMemberByLineUserId, listMembers } from '@/lib/repo/members'
 
 /**
@@ -27,8 +29,17 @@ async function loadGroupView(
   lineUserId: string,
 ): Promise<GroupView> {
   const empty: GroupView = { roster: [], payerName: null, unclaimed: [] }
-  if (lineGroupId === null) return empty
-  const group = await findActiveGroupByLineGroupId(lineGroupId)
+
+  // แชท 1:1 มีวงของมันเหมือนกัน — วงส่วนตัวของคนที่คุยอยู่ (D21) · ลืมข้อนี้แปลว่า
+  // คนที่จดบิลใน 1:1 มาสิบใบแล้วยังถูกถามตัวตนใหม่ทุกครั้ง และ `+ ข้าว 1200` เฉยๆ
+  // จะตอบว่า "ยังไม่รู้จักใครในวงนี้" ตลอดกาล
+  const group =
+    lineGroupId === null
+      ? await (async () => {
+          const owner = await findAppUserByLineUserId(lineUserId)
+          return owner === null ? null : findPersonalGroupByOwner(owner.id)
+        })()
+      : await findActiveGroupByLineGroupId(lineGroupId)
   if (group === null) return empty
 
   const members = await listMembers(group.id)
@@ -36,8 +47,18 @@ async function loadGroupView(
   return {
     roster: members.map((member) => member.displayName),
     payerName: payer?.displayName ?? null,
-    // คนที่ถูก claim ไปแล้วไม่ใช่ตัวเลือก — เขามีเจ้าของอยู่แล้ว
-    unclaimed: members.filter((m) => m.appUserId === null).map((m) => m.displayName),
+    /**
+     * คนที่ถูก claim ไปแล้วไม่ใช่ตัวเลือก — เขามีเจ้าของอยู่แล้ว
+     *
+     * เรียง**ใหม่ก่อน** เพราะ quick reply ใส่ได้ 12 ชื่อ · คนที่กำลังจะกดเลือกชื่อ
+     * ตัวเองมักเป็นคนที่เพิ่งถูกพิมพ์ชื่อเข้ามาในบิลไม่กี่ใบก่อนหน้า ไม่ใช่คนที่อยู่
+     * ในวงมาตั้งแต่แรก · **ยังไม่แก้ปัญหาวงที่มีคนยังไม่ claim เกิน 12 คนได้ทั้งหมด**
+     * — ดูของค้างท้าย `docs/PLAN-M6.md`
+     */
+    unclaimed: members
+      .filter((m) => m.appUserId === null)
+      .reverse()
+      .map((m) => ({ id: m.id, name: m.displayName })),
   }
 }
 
@@ -110,6 +131,12 @@ export async function POST(request: Request): Promise<Response> {
         if (!canReply) throw new Error('ไม่มี access token — ยังไม่เขียน draft')
         return (await createDraft(input)).id
       },
+      confirmDraft: async (input) => {
+        if (!canReply) throw new Error('ไม่มี access token — ยังไม่ลงบิล')
+        return confirmDraft(input)
+      },
+      fetchDisplayName: (lineGroupId, lineUserId) =>
+        fetchDisplayName({ lineGroupId, lineUserId, accessToken }, { fetch }),
     },
   )
 

@@ -45,6 +45,11 @@ type FlexButton = {
 
 type FlexComponent = FlexText | FlexBox | FlexSeparator | FlexButton
 
+type QuickReplyItem = {
+  type: 'action'
+  action: { type: 'postback'; label: string; data: string; displayText: string }
+}
+
 export interface LineFlexMessage {
   type: 'flex'
   /** ข้อความที่ขึ้นใน notification และในไคลเอนต์ที่แสดง Flex ไม่ได้ */
@@ -54,7 +59,17 @@ export interface LineFlexMessage {
     body: FlexBox
     footer: FlexBox
   }
+  quickReply?: { items: QuickReplyItem[] }
 }
+
+/**
+ * LINE รับ quick reply ได้ 13 ปุ่มต่อข้อความ — กันไว้หนึ่งช่องให้ `ฉันเป็นคนใหม่`
+ * ซึ่งต้องมีเสมอ ไม่งั้นคนในวงใหญ่ที่ยังไม่มีชื่อตัวเองจะไปต่อไม่ได้เลย
+ */
+const MAX_IDENTITY_CHOICES = 12
+
+/** ปุ่มที่ยาวเกินจะถูกตัดให้พอดีจอ — ไม่ใช่เพดานที่เอกสารระบุ แต่กันไว้ */
+const MAX_LABEL = 20
 
 /**
  * คำอธิบายบิลคือทุก token ก่อนยอด ซึ่งยาวได้ถึงเพดานข้อความของ LINE — และยาวง่าย
@@ -86,7 +101,59 @@ function row(name: string, amountSatang: number): FlexBox {
   }
 }
 
-export function draftCardMessage(card: DraftCard, draftId: string): LineFlexMessage {
+/**
+ * แถวเลือกตัวตนของคนพิมพ์ (D29 / ADR 0002)
+ *
+ * เป็น quick reply ไม่ใช่ปุ่มบนการ์ด เพราะจำนวนตัวเลือกโตตามจำนวนคนในวง — การ์ด
+ * จะสูงขึ้นเรื่อยๆ ส่วน quick reply เลื่อนข้างได้และไม่กินพื้นที่การ์ดเลย
+ *
+ * ทุกปุ่มพา `draftId` ไปด้วย เพราะการกดคือ **claim + ยืนยันบิลในจังหวะเดียว**
+ */
+function identityQuickReply(
+  draftId: string,
+  unclaimed: readonly IdentityChoice[],
+): QuickReplyItem[] {
+  const items: QuickReplyItem[] = []
+  for (const choice of unclaimed.slice(0, MAX_IDENTITY_CHOICES)) {
+    // ส่ง **id ไม่ใช่ชื่อ** — ชื่อไทยที่ผ่าน `encodeURIComponent` ยาวขึ้นเก้าเท่า
+    // แล้วทะลุเพดาน 300 ตัวอักษรตั้งแต่ชื่อยาวราว 27 ตัว · id ยาวคงที่เสมอ
+    items.push({
+      type: 'action',
+      action: {
+        type: 'postback',
+        label: shorten(choice.name, MAX_LABEL),
+        data: `confirm=${draftId}&as=${choice.id}`,
+        displayText: choice.name,
+      },
+    })
+  }
+  items.push({
+    type: 'action',
+    action: {
+      type: 'postback',
+      label: 'ฉันเป็นคนใหม่',
+      data: `confirm=${draftId}&as=new`,
+      displayText: 'ฉันเป็นคนใหม่',
+    },
+  })
+  return items
+}
+
+/** Member ที่ยังไม่มีเจ้าของ — ตัวเลือกหนึ่งอันในแถวเลือกตัวตน */
+export interface IdentityChoice {
+  id: string
+  name: string
+}
+
+/**
+ * @param unclaimed Member ที่ยังไม่มีเจ้าของ · `null` = คนพิมพ์ยืนยันตัวตนไปแล้ว
+ *   จึงไม่ต้องถาม และการ์ดมีปุ่ม `ยืนยัน` ตามปกติ
+ */
+export function draftCardMessage(
+  card: DraftCard,
+  draftId: string,
+  unclaimed: readonly IdentityChoice[] | null = null,
+): LineFlexMessage {
   const description = shorten(card.description, MAX_DESCRIPTION)
   const header: FlexComponent[] = [
     {
@@ -110,10 +177,55 @@ export function draftCardMessage(card: DraftCard, draftId: string): LineFlexMess
     header.push({ type: 'text', text: `#${card.eventTag}`, size: 'sm', color: '#8c8c8c' })
   }
 
+  /**
+   * ยังไม่รู้ว่าเขาคือใคร = **ไม่มีปุ่มยืนยันบนการ์ด**
+   *
+   * ปล่อยให้มีจะกลายเป็นทางตัน: กดแล้วเราไม่รู้ว่าจะบันทึกว่าใครจ่าย แล้วต้องตอบ
+   * ให้ไปกดปุ่มอื่นแทน ซึ่งเป็นการเพิ่มรอบให้กับสิ่งที่ ADR 0002 ตั้งใจให้จบในกดเดียว
+   */
+  const footer: FlexBox =
+    unclaimed === null
+      ? {
+          type: 'box',
+          layout: 'vertical',
+          contents: [
+            {
+              type: 'button',
+              style: 'primary',
+              height: 'sm',
+              action: {
+                type: 'postback',
+                label: 'ยืนยัน',
+                // **id ของ draft เท่านั้น** — สั้นและยาวคงที่ ไม่โตตามจำนวนคนในบิล
+                // จึงไม่มีวันชนเพดาน 300 ตัวอักษรของ postback data (ADR 0001)
+                data: `confirm=${draftId}`,
+                // ข้อความที่ขึ้นในแชทในนามคนกด — ทำให้กลุ่มเห็นว่าใครเป็นคนยืนยัน
+                displayText: 'ยืนยัน',
+              },
+            },
+          ],
+        }
+      : {
+          type: 'box',
+          layout: 'vertical',
+          contents: [
+            {
+              type: 'text',
+              text: 'เลือกชื่อของคุณด้านล่างเพื่อยืนยัน',
+              size: 'sm',
+              color: '#8c8c8c',
+              wrap: true,
+            },
+          ],
+        }
+
   return {
     type: 'flex',
     // ยอดกับจำนวนคนอยู่ในบรรทัดเดียว เพราะนี่คือทั้งหมดที่คนเห็นตอนเด้งเตือน
     altText: `ตรวจบิล ${description} ${baht(card.totalSatang)} · ${card.lines.length} คน`,
+    ...(unclaimed === null
+      ? {}
+      : { quickReply: { items: identityQuickReply(draftId, unclaimed) } }),
     contents: {
       type: 'bubble',
       body: {
@@ -133,26 +245,7 @@ export function draftCardMessage(card: DraftCard, draftId: string): LineFlexMess
           },
         ],
       },
-      footer: {
-        type: 'box',
-        layout: 'vertical',
-        contents: [
-          {
-            type: 'button',
-            style: 'primary',
-            height: 'sm',
-            action: {
-              type: 'postback',
-              label: 'ยืนยัน',
-              // **id ของ draft เท่านั้น** — สั้นและยาวคงที่ ไม่โตตามจำนวนคนในบิล
-              // จึงไม่มีวันชนเพดาน 300 ตัวอักษรของ postback data (ADR 0001)
-              data: `confirm=${draftId}`,
-              // ข้อความที่ขึ้นในแชทในนามคนกด — ทำให้กลุ่มเห็นว่าใครเป็นคนยืนยัน
-              displayText: 'ยืนยัน',
-            },
-          },
-        ],
-      },
+      footer,
     },
   }
 }

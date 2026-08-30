@@ -14,6 +14,7 @@
 import type { LineMessage } from './messages'
 
 const REPLY_ENDPOINT = 'https://api.line.me/v2/bot/message/reply'
+const API_BASE = 'https://api.line.me/v2/bot'
 
 /** LINE รับได้สูงสุด 5 ก้อนต่อหนึ่ง reply */
 const MAX_MESSAGES = 5
@@ -68,6 +69,46 @@ async function isInvalidReplyToken(response: Response): Promise<boolean> {
   if (typeof body !== 'object' || body === null) return false
   const { message } = body as { message?: unknown }
   return message === 'Invalid reply token'
+}
+
+/**
+ * ชื่อที่คนตั้งไว้ใน LINE — ใช้ตอนเขากด "ฉันเป็นคนใหม่" (D29 / ADR 0002)
+ *
+ * S1 ยิงของจริงแล้ว: endpoint ของกลุ่มตอบ 200 พร้อม `displayName` บน OA ที่ยัง
+ * **ไม่ verified** และคนนั้น**ไม่ต้องแอดบอทเป็นเพื่อน** (`docs/SPIKE-PHASE0.md` §S1)
+ *
+ * คืน `null` เมื่อดึงไม่ได้ — เกิดได้จริงเมื่อผู้ใช้ไม่ได้ให้ consent · **ห้ามเดา
+ * ชื่อแทน** เพราะชื่อที่เดาจะกลายเป็น Member ถาวรที่ลบไม่ได้ (D18)
+ */
+export async function fetchDisplayName(
+  target: { lineGroupId: string | null; lineUserId: string; accessToken: string },
+  deps: ReplyDeps,
+): Promise<string | null> {
+  const url =
+    target.lineGroupId === null
+      ? `${API_BASE}/profile/${encodeURIComponent(target.lineUserId)}`
+      : `${API_BASE}/group/${encodeURIComponent(target.lineGroupId)}/member/${encodeURIComponent(target.lineUserId)}`
+
+  let response: Response
+  try {
+    response = await deps.fetch(url, {
+      headers: { authorization: `Bearer ${target.accessToken}` },
+      signal: AbortSignal.timeout(deps.timeoutMs ?? DEFAULT_TIMEOUT_MS),
+    })
+  } catch {
+    return null
+  }
+  if (!response.ok) return null
+
+  let body: unknown
+  try {
+    body = await response.json()
+  } catch {
+    return null
+  }
+  if (typeof body !== 'object' || body === null) return null
+  const { displayName } = body as { displayName?: unknown }
+  return typeof displayName === 'string' && displayName.trim() !== '' ? displayName : null
 }
 
 export async function replyToLine(req: ReplyRequest, deps: ReplyDeps): Promise<ReplyOutcome> {

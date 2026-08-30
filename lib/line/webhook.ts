@@ -10,7 +10,7 @@
 
 import type { ReplyOutcome } from './client'
 import { parseLineEvents, type LineEvent } from './events'
-import { draftCardMessage } from './flex'
+import { draftCardMessage, type IdentityChoice } from './flex'
 import { verifyLineSignature } from './signature'
 import { stripMentions } from './mention'
 import { renderReply, type LineMessage } from './messages'
@@ -18,7 +18,7 @@ import { buildDraft } from '../flow/draft'
 import { decideReply, type Surface } from '../flow/dispatch'
 import { parseAddressedMessage, parseMessage } from '../parser/rules'
 import { bangkokDate } from '../time'
-import type { ExpenseDraft } from '../types'
+import type { DraftLine, ExpenseDraft } from '../types'
 
 export interface LineWebhookRequest {
   /** ไบต์ที่มาจริง ยังไม่ผ่าน JSON.parse — ลายเซ็นคิดจากตัวนี้ */
@@ -35,6 +35,8 @@ export interface SaveDraftInput {
   lineGroupId: string | null
   lineUserId: string
   draft: ExpenseDraft
+  /** ผลหารที่คำนวณเสร็จแล้ว — ตัวเลขชุดเดียวกับที่คนเห็นบนการ์ด */
+  lines: readonly DraftLine[]
   /** `'YYYY-MM-DD'` เวลาไทย แช่ไว้ตั้งแต่ตอนนี้ (D35) */
   spentAt: string
 }
@@ -50,15 +52,31 @@ export interface GroupView {
   roster: readonly string[]
   /** ชื่อ Member ของคนพิมพ์ · `null` = เขายังไม่เคยยืนยันตัวตนในวงนี้ (D29) */
   payerName: string | null
-  /** ชื่อ Member ที่ยังไม่มีเจ้าของ — ตัวเลือกตอนถามตัวตน (ADR 0002) */
-  unclaimed: readonly string[]
+  /** Member ที่ยังไม่มีเจ้าของ — ตัวเลือกตอนถามตัวตน (ADR 0002) */
+  unclaimed: readonly IdentityChoice[]
 }
+
+/** ผลของการกดยืนยัน — ตรงกับ `ConfirmDraftResult` ของ `lib/repo/confirm.ts` */
+export type ConfirmOutcome =
+  | { kind: 'committed'; description: string; totalSatang: number }
+  | { kind: 'gone' }
+  | { kind: 'not-yours' }
+  | { kind: 'name-taken'; name: string }
+  | { kind: 'needs-identity' }
 
 export interface LineWebhookDeps {
   reply: (replyToken: string, messages: readonly LineMessage[]) => Promise<ReplyOutcome>
   loadGroupView: (lineGroupId: string | null, lineUserId: string) => Promise<GroupView>
   /** คืน id ของ draft ที่เพิ่งเขียน — ใช้เป็น postback data */
   saveDraft: (input: SaveDraftInput) => Promise<string>
+  /** ยืนยันบิล — transaction เดียวที่แตะเงิน (M6) */
+  confirmDraft: (input: {
+    draftId: string
+    lineUserId: string
+    payer?: { kind: 'member'; memberId: string } | { kind: 'new'; displayName: string }
+  }) => Promise<ConfirmOutcome>
+  /** ชื่อที่คนตั้งไว้ใน LINE — `null` = ดึงไม่ได้ ห้ามเดาแทน */
+  fetchDisplayName: (lineGroupId: string | null, lineUserId: string) => Promise<string | null>
   /** นาฬิกาหน่วย ms — แยกออกมาเพื่อให้เทสต์กำหนดค่าได้ */
   now?: () => number
 }
@@ -101,10 +119,7 @@ function surfaceOf(event: LineEvent): Surface {
  * คนพูดกับเราอยู่ ซึ่งทำให้กฎเงียบไม่มีผลกับข้อความนั้น
  */
 async function messagesFor(event: LineEvent, deps: LineWebhookDeps): Promise<LineMessage[]> {
-  if (event.kind !== 'text') {
-    // postback มาจากการ์ดของเราเอง — ปุ่มยืนยันเริ่มทำงานตอน M6
-    return []
-  }
+  if (event.kind === 'postback') return messagesForPostback(event, deps)
 
   const { text, mentionsBot } = stripMentions(event.text, event.mentionees)
   const parsed = mentionsBot ? parseAddressedMessage(text) : parseMessage(text)
@@ -128,9 +143,90 @@ async function messagesFor(event: LineEvent, deps: LineWebhookDeps): Promise<Lin
     lineGroupId,
     lineUserId,
     draft: plan.draft,
+    lines: outcome.card.lines,
     spentAt: bangkokDate(event.timestamp),
   })
-  return [draftCardMessage(outcome.card, draftId)]
+  // ยังไม่รู้ว่าเขาคือใคร = การ์ดมีแถวเลือกตัวตนแทนปุ่มยืนยัน (D29 / ADR 0002)
+  return [draftCardMessage(outcome.card, draftId, view.payerName === null ? view.unclaimed : null)]
+}
+
+/**
+ * `confirm=<draftId>` หรือ `confirm=<draftId>&as=<memberId|new>`
+ *
+ * ยาวคงที่และไม่มีชื่อคนอยู่ในนั้น — ชื่อไทยที่ผ่าน `encodeURIComponent` ยาวขึ้น
+ * เก้าเท่าแล้วทะลุเพดาน 300 ตัวอักษรของ postback data (ADR 0001)
+ */
+function parseConfirmData(
+  data: string,
+): { draftId: string; as: string | null } | null {
+  const params = new URLSearchParams(data)
+  const draftId = params.get('confirm')
+  if (draftId === null || draftId === '') return null
+  const as = params.get('as')
+  return { draftId, as: as === null || as === '' ? null : as }
+}
+
+async function messagesForPostback(
+  event: LineEvent & { kind: 'postback' },
+  deps: LineWebhookDeps,
+): Promise<LineMessage[]> {
+  const parsed = parseConfirmData(event.data)
+  // postback ที่ไม่ใช่ของเรา — เงียบ ไม่เดาว่าเป็นอะไร
+  if (parsed === null) return []
+
+  const lineUserId = event.source.lineUserId
+  if (lineUserId === null) return renderReply({ kind: 'unknown-sender' })
+
+  const lineGroupId = event.source.kind === 'group' ? event.source.lineGroupId : null
+
+  /**
+   * `ฉันเป็นคนใหม่` ยิงสองรอบโดยตั้งใจ
+   *
+   * รอบแรกไม่มีตัวตนแนบไป ทำหน้าที่เป็นด่านตรวจว่าใครกด (D26) และการ์ดยังใช้ได้ไหม
+   * — ทั้งสองอย่างตอบได้จากแถว draft อย่างเดียว และรอบนี้ยังไม่ลบอะไรเลย · ดึงชื่อ
+   * จาก LINE ก่อนแล้วค่อยตรวจ แปลว่าใครก็ได้ในกลุ่มกดการ์ดของคนอื่นแล้วเผา API call
+   * กับเวลาของ reply token ทิ้งได้ฟรีๆ ทั้งที่คำตอบสุดท้ายคือความเงียบ
+   *
+   * รอบที่สองเกิดเฉพาะตอนระบบยืนยันแล้วว่าเขาคือคนพิมพ์และยังไม่รู้ว่าเขาคือใคร
+   */
+  let outcome = await deps.confirmDraft({
+    draftId: parsed.draftId,
+    lineUserId,
+    ...(parsed.as === null || parsed.as === 'new'
+      ? {}
+      : { payer: { kind: 'member' as const, memberId: parsed.as } }),
+  })
+
+  if (outcome.kind === 'needs-identity' && parsed.as === 'new') {
+    // ดึงชื่อ**นอก transaction** — เรียก API ของ LINE ระหว่างถือ lock อยู่คือการผูก
+    // อายุ transaction ไว้กับความเร็วของเน็ตคนอื่น
+    const displayName = await deps.fetchDisplayName(lineGroupId, lineUserId)
+    if (displayName === null) return renderReply({ kind: 'no-display-name' })
+    outcome = await deps.confirmDraft({
+      draftId: parsed.draftId,
+      lineUserId,
+      payer: { kind: 'new', displayName },
+    })
+  }
+
+  switch (outcome.kind) {
+    case 'committed':
+      return renderReply({
+        kind: 'committed',
+        description: outcome.description,
+        totalSatang: outcome.totalSatang,
+      })
+    case 'gone':
+      return renderReply({ kind: 'draft-gone' })
+    case 'not-yours':
+      // **เงียบ** ไม่ตอบว่า "ไม่มีสิทธิ์" — การประกาศแบบนั้นในกลุ่มเพื่อนคือการ
+      // ทำให้เสียหน้าโดยไม่จำเป็น (D26)
+      return []
+    case 'name-taken':
+      return renderReply({ kind: 'name-taken', name: outcome.name })
+    case 'needs-identity':
+      return renderReply({ kind: 'needs-identity' })
+  }
 }
 
 export async function handleLineWebhook(

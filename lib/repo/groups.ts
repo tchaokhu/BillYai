@@ -136,6 +136,30 @@ export async function ensureLineGroup(
 // ─── วงส่วนตัว ────────────────────────────────────────────────────────
 
 /**
+ * วงส่วนตัวของเจ้าของคนนี้ — `null` เมื่อยังไม่มี
+ *
+ * มีอยู่เพื่อให้แชท 1:1 หนึ่งคนแมปกับวงเดียวตลอด ไม่ใช่วงใหม่ทุกบิล · วงส่วนตัว
+ * เกิดตอนกดยืนยันบิลใบแรก (D30) ใบต่อๆ ไปจึงต้องหาของเดิมให้เจอ
+ *
+ * `line_group_id is null` อยู่ในเงื่อนไขด้วยเพราะวงส่วนตัวผูกเข้ากลุ่ม LINE ทีหลังได้
+ * (ทางเดียว) — พอผูกแล้วมันไม่ใช่ปลายทางของแชท 1:1 อีกต่อไป
+ */
+export async function findPersonalGroupByOwner(
+  ownerId: string,
+  dbOrTx?: Queryable,
+): Promise<LedgerGroup | null> {
+  return queryGroup(
+    db(dbOrTx),
+    `select * from ledger_group
+      where owner_id = $1 and kind = 'personal' and line_group_id is null
+        and status = 'active'
+      order by created_at
+      limit 1`,
+    [ownerId],
+  )
+}
+
+/**
  * สร้างวงส่วนตัว (D21) — วงที่ไม่มีกลุ่ม LINE รองรับ
  *
  * ต้องมีทางเข้าถึงอย่างน้อยหนึ่งทาง: `ownerId` (เจ้าของที่มี App User แล้ว)

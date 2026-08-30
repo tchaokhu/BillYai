@@ -29,8 +29,8 @@ describe('buildDraft — ระบุชื่อคนหาร', () => {
     expect(result.kind).toBe('card')
     if (result.kind !== 'card') return
     expect(result.card.lines).toEqual([
-      { name: 'กอล์ฟ', amountSatang: 60000, isNew: true },
-      { name: 'ตูน', amountSatang: 60000, isNew: true },
+      { name: 'กอล์ฟ', amountSatang: 60000, isNew: true, isPayer: false },
+      { name: 'ตูน', amountSatang: 60000, isNew: true, isPayer: false },
     ])
   })
 
@@ -154,8 +154,8 @@ describe('buildDraft — ป้าย (ใหม่) ตาม D28', () => {
     )
     if (result.kind !== 'card') throw new Error('ต้องได้การ์ด')
     expect(result.card.lines).toEqual([
-      { name: 'กอล์ฟ', amountSatang: 60000, isNew: false },
-      { name: 'กอล์ป', amountSatang: 60000, isNew: true },
+      { name: 'กอล์ฟ', amountSatang: 60000, isNew: false, isPayer: false },
+      { name: 'กอล์ป', amountSatang: 60000, isNew: true, isPayer: false },
     ])
   })
 
@@ -215,5 +215,30 @@ describe('buildDraft — ยอดบนการ์ดต้องเป็น�
     )
     if (result.kind !== 'card') throw new Error('ต้องได้การ์ด')
     expect(result.card.description).toBe('หมูกระทะ')
+  })
+})
+
+describe('buildDraft — แถวไหนเป็นของคนพิมพ์', () => {
+  it('แถวที่ชื่อ `คุณ` คือของคนพิมพ์', () => {
+    const result = buildDraft(draft(), ['กอล์ฟ'], null)
+    if (result.kind !== 'card') throw new Error('ต้องได้การ์ด')
+    expect(result.card.lines.filter((l) => l.isPayer).map((l) => l.name)).toEqual([PAYER_LABEL])
+  })
+
+  it('คนพิมพ์ที่ claim แล้วก็ยังถูกมาร์กไว้ ถึงจะโผล่ด้วยชื่อจริง', () => {
+    // ตอนยืนยันต้องรู้ว่าแถวไหนเป็นของเขา เพราะชื่อบนแถวอาจไม่ใช่ชื่อ Member จริง
+    const result = buildDraft(draft(), ['กอล์ฟ', 'ตูน'], 'กอล์ฟ')
+    if (result.kind !== 'card') throw new Error('ต้องได้การ์ด')
+    expect(result.card.lines.filter((l) => l.isPayer).map((l) => l.name)).toEqual(['กอล์ฟ'])
+  })
+
+  it('ระบุชื่อคนแล้วไม่ `รวมฉัน` ไม่มีแถวของคนพิมพ์เลย', () => {
+    const result = buildDraft(
+      draft({ participants: named('กอล์ฟ', 'ตูน'), includesPayer: false }),
+      [],
+      null,
+    )
+    if (result.kind !== 'card') throw new Error('ต้องได้การ์ด')
+    expect(result.card.lines.some((l) => l.isPayer)).toBe(false)
   })
 })

@@ -10,8 +10,8 @@
  */
 
 import { getPool, type Queryable } from '@/lib/db/client'
-import { parseDraftPayload } from '@/lib/db/draft-payload'
-import type { ExpenseDraft } from '@/lib/types'
+import { parseStoredDraft, type StoredDraft } from '@/lib/db/draft-payload'
+import type { DraftLine, ExpenseDraft } from '@/lib/types'
 
 /**
  * อายุของ draft — 24 ชั่วโมงนับจากตอนสร้าง
@@ -32,6 +32,8 @@ export interface CreateDraftInput {
   /** คนพิมพ์ — D26 ให้เฉพาะคนนี้กดยืนยันได้ */
   lineUserId: string
   draft: ExpenseDraft
+  /** ผลหารที่คำนวณเสร็จแล้ว — ตัวเลขชุดเดียวกับที่คนเห็นบนการ์ด */
+  lines: readonly DraftLine[]
   /** `'YYYY-MM-DD'` แช่ไว้ตั้งแต่ตอนสร้าง (D35) */
   spentAt: string
 }
@@ -41,6 +43,7 @@ export interface DraftRecord {
   lineGroupId: string | null
   lineUserId: string
   draft: ExpenseDraft
+  lines: DraftLine[]
   spentAt: string
   createdAt: Date
 }
@@ -79,14 +82,15 @@ function assertSpentAt(spentAt: string): void {
 }
 
 function toDraftRecord(row: DraftRow): DraftRecord | null {
-  const draft = parseDraftPayload(row.payload)
+  const stored = parseStoredDraft(row.payload)
   // payload ที่อ่านไม่ออก = ปฏิบัติเหมือนการ์ดหมดอายุ ไม่ใช่ throw ขึ้นไปถึง webhook
-  if (draft === null) return null
+  if (stored === null) return null
   return {
     id: row.id,
     lineGroupId: row.line_group_id,
     lineUserId: row.line_user_id,
-    draft,
+    draft: stored.draft,
+    lines: stored.lines,
     spentAt: row.spent_at,
     createdAt: row.created_at,
   }
@@ -111,9 +115,10 @@ export async function createDraft(
   if (input.lineUserId.trim() === '') {
     throw new Error('lineUserId ว่างไม่ได้ — D26 ต้องรู้ว่าใครพิมพ์')
   }
-  if (parseDraftPayload(input.draft) === null) {
+  const payload: StoredDraft = { draft: input.draft, lines: [...input.lines] }
+  if (parseStoredDraft(payload) === null) {
     // ตรวจก่อนเขียน ไม่ใช่ตอนอ่าน — payload ที่ผิดสัญญาไม่ควรมีทางลงตารางได้เลย
-    throw new Error('draft ไม่ผ่านสัญญาของ ExpenseDraft')
+    throw new Error('draft ไม่ผ่านสัญญาของ payload')
   }
 
   const result = await db(dbOrTx).query<DraftRow>(
@@ -123,7 +128,7 @@ export async function createDraft(
      insert into expense_draft (line_group_id, line_user_id, payload, spent_at)
      values ($1, $2, $3::jsonb, $4)
      returning *`,
-    [input.lineGroupId, input.lineUserId, JSON.stringify(input.draft), input.spentAt],
+    [input.lineGroupId, input.lineUserId, JSON.stringify(payload), input.spentAt],
   )
 
   const row = result.rows[0]

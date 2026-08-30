@@ -322,10 +322,14 @@ describe('ชื่อว่างสร้างไม่ได้', () => {
     ).rejects.toThrow(/member_display_name_check/)
   })
 
-  it('ชื่อที่มีช่องว่างหัวท้ายแต่มีตัวอักษรจริงยังใช้ได้', async () => {
+  it('ชื่อที่มีช่องว่างหัวท้ายแต่มีตัวอักษรจริงยังใช้ได้ — แต่ถูกตัดช่องว่างก่อนเก็บ', async () => {
+    // M2 เก็บดิบๆ · เปลี่ยนตอน M6 เพราะชื่อจาก LINE มีช่องว่างติดมาได้ แล้วชั้นที่
+    // เทียบชื่อกับ Roster เทียบแบบ trim — ` กอล์ฟ ` ในตารางจึงไม่มีวันตรงกับ `กอล์ฟ`
+    // ที่ส่งมาเทียบ ผลคือคนจ่ายหายจากบิล แล้วรอบถัดไปเกิด Member ที่สองของคนเดิม
+    // ซึ่งลบไม่ได้ตลอดกาล (D18)
     const group = await makeGroup()
     const member = await ensureMember(group.id, ' กอล์ฟ ')
-    expect(member.displayName).toBe(' กอล์ฟ ')
+    expect(member.displayName).toBe('กอล์ฟ')
   })
 })
 
@@ -743,5 +747,30 @@ describe('findMemberByLineUserId — คนพิมพ์คือ Member ต�
     await claimMember(member.id, user.id)
 
     expect(await findMemberByLineUserId(second.id, lineUserId)).toBeNull()
+  })
+})
+
+describe('ชื่อถูก trim ตอนเขียน — กัน Member ซ้ำแบบเงียบ', () => {
+  it('`ensureMember` เก็บชื่อที่ตัดช่องว่างหัวท้ายแล้ว', async () => {
+    const group = await makeGroup()
+    const member = await ensureMember(group.id, '  กอล์ฟ  ')
+    expect(member.displayName).toBe('กอล์ฟ')
+  })
+
+  it('ชื่อที่ต่างกันแค่ช่องว่างคือคนเดียวกัน ไม่ใช่สองแถว', async () => {
+    // ชื่อจาก LINE มีช่องว่างติดมาได้ · เก็บดิบๆ แล้วรอบถัดไปจะกลายเป็นคนที่สอง
+    // ซึ่งลบไม่ได้ตลอดกาล (D18) และหนี้ของเขาแตกเป็นสองก้อน
+    const group = await makeGroup()
+    const first = await ensureMember(group.id, 'ตูน')
+    const second = await ensureMember(group.id, ' ตูน ')
+    expect(second.id).toBe(first.id)
+  })
+
+  it('`ensureMembers` ก็ trim เหมือนกัน — ชื่อที่ต่างแค่ช่องว่างยุบเป็นแถวเดียว', async () => {
+    const group = await makeGroup()
+    const members = await ensureMembers(group.id, ['เบียร์', ' เบียร์ '])
+    expect(new Set(members.map((m) => m.id)).size).toBe(1)
+    const names = (await listMembers(group.id)).map((m) => m.displayName)
+    expect(names.filter((n) => n === 'เบียร์')).toHaveLength(1)
   })
 })

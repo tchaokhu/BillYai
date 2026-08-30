@@ -33,15 +33,25 @@ function firstText(messages: readonly LineMessage[]): string | null {
 function fakeDb(roster: readonly string[] = [], payerName: string | null = null) {
   const saved: Array<Parameters<LineWebhookDeps['saveDraft']>[0]> = []
   const viewed: Array<{ lineGroupId: string | null; lineUserId: string }> = []
+  const confirmed: Array<Parameters<LineWebhookDeps['confirmDraft']>[0]> = []
   const loadGroupView = vi.fn(async (lineGroupId: string | null, lineUserId: string) => {
     viewed.push({ lineGroupId, lineUserId })
-    return { roster, payerName, unclaimed: roster }
+    return {
+      roster,
+      payerName,
+      unclaimed: roster.map((name, i) => ({ id: `member-${i}`, name })),
+    }
   })
   const saveDraft = vi.fn(async (input: Parameters<LineWebhookDeps['saveDraft']>[0]) => {
     saved.push(input)
     return `draft-${saved.length}`
   })
-  return { saved, viewed, loadGroupView, saveDraft }
+  const confirmDraft = vi.fn<LineWebhookDeps['confirmDraft']>(async (input) => {
+    confirmed.push(input)
+    return { kind: 'committed', description: 'ข้าว', totalSatang: 120000 }
+  })
+  const fetchDisplayName = vi.fn<LineWebhookDeps['fetchDisplayName']>(async () => 'ชื่อจาก LINE')
+  return { saved, viewed, confirmed, loadGroupView, saveDraft, confirmDraft, fetchDisplayName }
 }
 
 /** นาฬิกาปลอมที่เดินทีละ 1 ms ทุกครั้งที่ถูกอ่าน — ทำให้ค่าเวลาคาดเดาได้ */
@@ -70,13 +80,30 @@ function directText(text: string, replyToken = 'token-1'): unknown {
   }
 }
 
+function postback(data: string, replyToken = 'token-1'): unknown {
+  return {
+    type: 'postback',
+    replyToken,
+    timestamp: 1_787_000_000_000,
+    source: { type: 'group', groupId: GROUP_ID, userId: USER_ID },
+    postback: { data },
+  }
+}
+
 async function run(events: unknown[], outcome?: ReplyOutcome, roster: readonly string[] = []) {
   const body = JSON.stringify({ events })
   const fake = fakeReply(outcome)
   const db = fakeDb(roster)
   const result = await handleLineWebhook(
     { rawBody: body, signature: sign(body), channelSecret: SECRET },
-    { reply: fake.reply, loadGroupView: db.loadGroupView, saveDraft: db.saveDraft, now: fakeClock() },
+    {
+      reply: fake.reply,
+      loadGroupView: db.loadGroupView,
+      saveDraft: db.saveDraft,
+      confirmDraft: db.confirmDraft,
+      fetchDisplayName: db.fetchDisplayName,
+      now: fakeClock(),
+    },
   )
   return { result, ...fake, ...db }
 }
@@ -223,15 +250,8 @@ describe('handleLineWebhook — ตอบเมื่อถูกเรียก
     expect(firstText(calls[0]?.messages ?? [])).toContain('บิลใหญ่')
   })
 
-  it('postback ยังไม่มีของให้ทำ — เงียบ ไม่ throw', async () => {
-    const event = {
-      type: 'postback',
-      replyToken: 'token-1',
-      timestamp: 1_787_000_000_000,
-      source: { type: 'group', groupId: GROUP_ID, userId: USER_ID },
-      postback: { data: 'confirm=1' },
-    }
-    const { result, reply } = await run([event])
+  it('postback ที่ไม่ใช่ของเรา — เงียบ ไม่เดาว่าเป็นอะไร', async () => {
+    const { result, reply } = await run([postback('อะไรก็ไม่รู้')])
     expect(result.status).toBe(200)
     expect(reply).not.toHaveBeenCalled()
   })
@@ -404,6 +424,8 @@ describe('handleLineWebhook — DB ล่มตอนยังไม่ได้
           throw new Error('connection refused')
         },
         saveDraft: async () => 'ไม่ควรถูกเรียก',
+        confirmDraft: async () => ({ kind: 'gone' as const }),
+        fetchDisplayName: async () => null,
         now: fakeClock(),
       },
     )
@@ -422,6 +444,8 @@ describe('handleLineWebhook — DB ล่มตอนยังไม่ได้
         saveDraft: async () => {
           throw new Error('connection refused')
         },
+        confirmDraft: async () => ({ kind: 'gone' as const }),
+        fetchDisplayName: async () => null,
         now: fakeClock(),
       },
     )
@@ -442,6 +466,8 @@ describe('handleLineWebhook — DB ล่มตอนยังไม่ได้
           throw new Error('connection refused')
         },
         saveDraft: async () => 'ไม่ควรถูกเรียก',
+        confirmDraft: async () => ({ kind: 'gone' as const }),
+        fetchDisplayName: async () => null,
         now: fakeClock(),
       },
     )
@@ -463,9 +489,136 @@ describe('handleLineWebhook — DB ล่มตอนยังไม่ได้
           throw new Error('connection refused')
         },
         saveDraft: async () => 'ไม่ควรถูกเรียก',
+        confirmDraft: async () => ({ kind: 'gone' as const }),
+        fetchDisplayName: async () => null,
         now: fakeClock(),
       },
     )
     expect(res.prepareFailed).toBe(1)
+  })
+})
+
+describe('handleLineWebhook — กดยืนยัน (M6)', () => {
+  const DRAFT_ID = '4f1c2a5e-0000-4000-8000-000000000001'
+
+  it('กดปุ่มยืนยันเปล่าๆ ส่งต่อไปโดยไม่มีตัวตนแนบมา', async () => {
+    const { confirmed, calls } = await run([postback(`confirm=${DRAFT_ID}`)])
+    expect(confirmed).toEqual([{ draftId: DRAFT_ID, lineUserId: USER_ID }])
+    expect(firstText(calls[0]?.messages ?? [])).toContain('จดแล้ว')
+  })
+
+  it('เลือกชื่อที่มีอยู่แล้ว ส่ง member id ไปให้', async () => {
+    const { confirmed } = await run([postback(`confirm=${DRAFT_ID}&as=member-0`)])
+    expect(confirmed[0]?.payer).toEqual({ kind: 'member', memberId: 'member-0' })
+  })
+
+  it('กด "ฉันเป็นคนใหม่" ตรวจว่าใครกดก่อน แล้วค่อยดึงชื่อจาก LINE', async () => {
+    const body = JSON.stringify({ events: [postback(`confirm=${DRAFT_ID}&as=new`)] })
+    const fake = fakeReply()
+    const db = fakeDb()
+    db.confirmDraft
+      .mockResolvedValueOnce({ kind: 'needs-identity' })
+      .mockResolvedValueOnce({ kind: 'committed', description: 'ข้าว', totalSatang: 120000 })
+
+    await handleLineWebhook(
+      { rawBody: body, signature: sign(body), channelSecret: SECRET },
+      { reply: fake.reply, ...db, now: fakeClock() },
+    )
+
+    // `mockResolvedValueOnce` แทนที่ implementation ทั้งอัน จึงอ่านจาก mock.calls
+    // ไม่ใช่จาก array ที่ implementation เดิมเก็บไว้
+    const calls = db.confirmDraft.mock.calls
+    // รอบแรกไม่มีตัวตนแนบไป — เป็นด่านตรวจว่าใครกด ไม่ใช่การลงบิล
+    expect(calls[0]?.[0].payer).toBeUndefined()
+    expect(db.fetchDisplayName).toHaveBeenCalledWith(GROUP_ID, USER_ID)
+    expect(calls[1]?.[0].payer).toEqual({ kind: 'new', displayName: 'ชื่อจาก LINE' })
+    expect(firstText(fake.calls[0]?.messages ?? [])).toContain('จดแล้ว')
+  })
+
+  it('คนอื่นกด "ฉันเป็นคนใหม่" บนการ์ดของเรา — ไม่เผา API call ทิ้ง (D26)', async () => {
+    const body = JSON.stringify({ events: [postback(`confirm=${DRAFT_ID}&as=new`)] })
+    const fake = fakeReply()
+    const db = fakeDb()
+    db.confirmDraft.mockResolvedValue({ kind: 'not-yours' })
+
+    await handleLineWebhook(
+      { rawBody: body, signature: sign(body), channelSecret: SECRET },
+      { reply: fake.reply, ...db, now: fakeClock() },
+    )
+    expect(db.fetchDisplayName).not.toHaveBeenCalled()
+    expect(fake.reply).not.toHaveBeenCalled()
+  })
+
+  it('ดึงชื่อจาก LINE ไม่ได้ → บอกตรงๆ และไม่ลงบิล', async () => {
+    const body = JSON.stringify({ events: [postback(`confirm=${DRAFT_ID}&as=new`)] })
+    const fake = fakeReply()
+    const db = fakeDb()
+    db.confirmDraft.mockResolvedValue({ kind: 'needs-identity' })
+    db.fetchDisplayName.mockResolvedValue(null)
+    await handleLineWebhook(
+      { rawBody: body, signature: sign(body), channelSecret: SECRET },
+      { reply: fake.reply, ...db, now: fakeClock() },
+    )
+    // เรียกได้แค่รอบตรวจสิทธิ์ ไม่มีรอบที่ลงบิล
+    expect(db.confirmDraft).toHaveBeenCalledTimes(1)
+    expect(firstText(fake.calls[0]?.messages ?? [])).toContain('ดึงชื่อของคุณจาก LINE ไม่ได้')
+  })
+
+  it('คนอื่นกดการ์ดของเรา — **เงียบ** ไม่ประกาศว่าไม่มีสิทธิ์ (D26)', async () => {
+    const body = JSON.stringify({ events: [postback(`confirm=${DRAFT_ID}`)] })
+    const fake = fakeReply()
+    const db = fakeDb()
+    db.confirmDraft.mockResolvedValue({ kind: 'not-yours' })
+    const res = await handleLineWebhook(
+      { rawBody: body, signature: sign(body), channelSecret: SECRET },
+      { reply: fake.reply, ...db, now: fakeClock() },
+    )
+    expect(res.status).toBe(200)
+    expect(fake.reply).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['gone', 'ใช้ไม่ได้แล้ว'],
+    ['needs-identity', 'เลือกชื่อของคุณ'],
+  ] as const)('ผล %s ได้คำตอบที่บอกว่าต้องทำอะไรต่อ', async (kind, expected) => {
+    const body = JSON.stringify({ events: [postback(`confirm=${DRAFT_ID}`)] })
+    const fake = fakeReply()
+    const db = fakeDb()
+    db.confirmDraft.mockResolvedValue({ kind })
+    await handleLineWebhook(
+      { rawBody: body, signature: sign(body), channelSecret: SECRET },
+      { reply: fake.reply, ...db, now: fakeClock() },
+    )
+    expect(firstText(fake.calls[0]?.messages ?? [])).toContain(expected)
+  })
+
+  it('ชื่อชนกับคนอื่น — บอกชื่อที่ชนกลับไปด้วย', async () => {
+    const body = JSON.stringify({ events: [postback(`confirm=${DRAFT_ID}&as=member-0`)] })
+    const fake = fakeReply()
+    const db = fakeDb()
+    db.confirmDraft.mockResolvedValue({ kind: 'name-taken', name: 'กอล์ฟ' })
+    await handleLineWebhook(
+      { rawBody: body, signature: sign(body), channelSecret: SECRET },
+      { reply: fake.reply, ...db, now: fakeClock() },
+    )
+    expect(firstText(fake.calls[0]?.messages ?? [])).toContain('กอล์ฟ')
+  })
+
+  it('การ์ดของคนที่ยังไม่ยืนยันตัวตนมีแถวเลือกตัวตน', async () => {
+    const { calls } = await run([groupText('+ ข้าว 1200 กอล์ฟ')], undefined, ['ตูน'])
+    const message = calls[0]?.messages[0]
+    expect(message?.type).toBe('flex')
+    expect(JSON.stringify(message)).toContain('ฉันเป็นคนใหม่')
+  })
+
+  it('การ์ดของคนที่ยืนยันตัวตนแล้วไม่มีแถวนั้น', async () => {
+    const body = JSON.stringify({ events: [groupText('+ ข้าว 1200 กอล์ฟ')] })
+    const fake = fakeReply()
+    const db = fakeDb(['ตูน'], 'ตูน')
+    await handleLineWebhook(
+      { rawBody: body, signature: sign(body), channelSecret: SECRET },
+      { reply: fake.reply, ...db, now: fakeClock() },
+    )
+    expect(JSON.stringify(fake.calls[0]?.messages)).not.toContain('ฉันเป็นคนใหม่')
   })
 })

@@ -7,6 +7,7 @@
  */
 
 import { IMPLEMENTED_COMMANDS, type ReplyPlan } from '../flow/dispatch'
+import { formatSatang } from '../money'
 import type { BotCommand } from '../types'
 import type { LineFlexMessage } from './flex'
 
@@ -77,6 +78,18 @@ export function renderReply(plan: Exclude<ReplyPlan, { kind: 'draft' }>): LineTe
       return text(
         'จดให้ไม่ได้เพราะ LINE ไม่ได้บอกว่าใครเป็นคนพิมพ์ — ต้องยอมรับข้อตกลงการใช้งานบัญชีทางการก่อน แล้วพิมพ์ใหม่อีกครั้ง',
       )
+    case 'committed':
+      // ประกาศกลับเข้ากลุ่มเสมอ — ความโปร่งใสคือกลไกรักษาความปลอดภัยของระบบนี้ (D10)
+      return text(`จดแล้ว: ${plan.description} ฿${formatSatang(plan.totalSatang)}`)
+    case 'draft-gone':
+      return text('การ์ดใบนี้ใช้ไม่ได้แล้ว พิมพ์บิลใหม่อีกครั้งได้เลย')
+    case 'name-taken':
+      return text(`ชื่อ "${plan.name}" มีเจ้าของแล้วในวงนี้ ลองเลือกชื่ออื่นหรือกด "ฉันเป็นคนใหม่"`)
+    case 'needs-identity':
+      return text('เลือกชื่อของคุณจากปุ่มด้านล่างก่อน แล้วบิลจะถูกจดให้ทันที')
+    case 'no-display-name':
+      // ลองใหม่ไม่ช่วย — LINE ไม่ให้ชื่อมาจนกว่าเขาจะให้สิทธิ์
+      return text('ยังดึงชื่อของคุณจาก LINE ไม่ได้ ลองเลือกชื่อที่มีอยู่แล้วในวงแทน')
     case 'not-available':
       return text('คำสั่งนี้ยังไม่เปิดใช้')
   }
