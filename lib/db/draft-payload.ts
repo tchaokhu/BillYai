@@ -10,6 +10,7 @@
  * ทำให้ event ทั้งชุดพัง เพราะการ์ดใบเดียวที่เก่าเกินไป
  */
 
+import { isSupportedWeight } from '@/lib/money'
 import type { DraftParticipant, ExpenseDraft, SplitMode } from '@/lib/types'
 
 const SPLIT_MODES: ReadonlySet<SplitMode> = new Set<SplitMode>([
@@ -43,8 +44,9 @@ function participantsOf(value: unknown): DraftParticipant[] | null {
     const name = nonBlankString(record.name)
     if (name === null) return null
     const { weight } = record
-    // น้ำหนักศูนย์หรือติดลบทำให้ `distribute` คืนยอดที่ไม่มีความหมาย
-    if (typeof weight !== 'number' || !Number.isFinite(weight) || weight <= 0) return null
+    // ต้องเป็นช่วงเดียวกับที่ `distribute` รองรับจริง ไม่ใช่แค่ "มากกว่าศูนย์" —
+    // ไม่งั้น payload ที่เขียนลงตารางได้วันนี้จะคำนวณไม่ได้ตอน commit ใน M6
+    if (typeof weight !== 'number' || !isSupportedWeight(weight)) return null
     participants.push({ name, weight })
   }
   return participants

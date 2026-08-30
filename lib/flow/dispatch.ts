@@ -9,7 +9,7 @@
  * "อะไรยังไม่เปิด" เพราะคำสั่งที่เพิ่มเข้ามาใหม่ควรเป็นของที่ยังไม่เปิดโดยปริยาย
  */
 
-import type { BotCommand, ParseResult } from '../types'
+import type { BotCommand, ExpenseDraft, ParseResult } from '../types'
 
 /** ที่ที่ข้อความเข้ามา — วงส่วนตัวใช้ `direct` ตาม D21 */
 export type Surface = 'group' | 'direct'
@@ -23,7 +23,19 @@ export interface ReplyContext {
 export type ReplyPlan =
   | { kind: 'silent' }
   | { kind: 'guide' }
-  | { kind: 'not-available'; what: 'command' | 'expense' }
+  | { kind: 'not-available'; what: 'command' }
+  /** ต้องอ่าน Roster ก่อนถึงจะสร้างการ์ดได้ — ผู้เรียกเป็นคนไป I/O ต่อ */
+  | { kind: 'draft'; draft: ExpenseDraft }
+  /**
+   * ไม่ระบุชื่อใครในวงที่ Roster ยังว่าง — ตัดสินหลังอ่าน Roster แล้ว จึงมาจาก
+   * ผู้เรียก ไม่ใช่จาก `decideReply`
+   */
+  | { kind: 'need-names' }
+  /**
+   * LINE ไม่ส่ง `userId` มาให้ — เกิดเมื่อคนพิมพ์ยังไม่ยอมรับข้อตกลงการใช้งาน
+   * บัญชีทางการ · D26 ให้เฉพาะคนพิมพ์กดยืนยันได้ ซึ่งเช็คไม่ได้ถ้าไม่รู้ว่าใครพิมพ์
+   */
+  | { kind: 'unknown-sender' }
 
 /**
  * คำสั่งที่ลงของจริงแล้ว — M4 มีแค่ไกด์
@@ -45,8 +57,8 @@ export function decideReply(context: ReplyContext, parsed: ParseResult | null): 
     return silent ? { kind: 'silent' } : { kind: 'guide' }
   }
 
-  // การจดบิลลง ledger เปิดตอน M6 — ก่อนหน้านั้น draft ยังไม่มีที่เก็บ
-  if (parsed.kind === 'expense') return { kind: 'not-available', what: 'expense' }
+  // การ์ดเกิดที่นี่ แต่ยอดกับป้าย `(ใหม่)` ต้องรอ Roster ซึ่งเป็น I/O
+  if (parsed.kind === 'expense') return { kind: 'draft', draft: parsed.draft }
 
   // ยังไม่มีคำสั่งไหนรับส่วนต่อท้ายได้ (D34) — `ยอด #tag` รอ Phase 3
   if (parsed.args !== undefined) return { kind: 'not-available', what: 'command' }

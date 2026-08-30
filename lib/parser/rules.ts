@@ -1,3 +1,4 @@
+import { isSupportedWeight } from '../money'
 import type { BotCommand, DraftParticipant, ParseResult } from '../types'
 
 /** คำสั่งคำเดียว — ต้องตรงทั้งข้อความ (หลัง trim) ไม่งั้นถือว่าไม่เข้า Trigger */
@@ -140,7 +141,9 @@ function parseParticipant(token: string): DraftParticipant | null {
   // ชื่อว่าง (`x2`), ชื่อเป็นตัวเลข, หรือน้ำหนักซ้อน (`กอล์ฟx2x3`) = เดาไม่ได้
   if (normalizedName.length === 0 || isNumericLike(normalizedName)) return null
   if (WEIGHT_RE.test(normalizedName)) return null
-  if (!Number.isFinite(weight) || weight <= 0) return null
+  // น้ำหนักนอกช่วงที่ `distribute` รองรับต้องตกที่นี่ ไม่ใช่ไปโผล่เป็น throw
+  // กลางเส้นทาง webhook ซึ่งกลายเป็น 500 แล้ว LINE retry ซ้ำไม่รู้จบ
+  if (!isSupportedWeight(weight)) return null
 
   // normalizeDigits ไม่เปลี่ยนความยาว จึงตัดชื่อจาก token ต้นฉบับได้ตรงตำแหน่ง
   return { name: token.slice(0, normalizedName.length), weight }

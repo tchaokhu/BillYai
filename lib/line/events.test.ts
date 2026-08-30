@@ -186,3 +186,18 @@ describe('parseLineEvents — ไม่เชื่อรูปร่างอ�
     expect(parsed?.kind === 'text' ? parsed.text : null).toBe('')
   })
 })
+
+describe('timestamp ที่แปลงเป็นวันที่ไม่ได้ ต้องตกตั้งแต่ชั้นนี้', () => {
+  // `Date` รับได้แค่ ±8.64e15 · ค่าที่เกินจะทำให้ `bangkokDate` โยน RangeError
+  // กลางเส้นทาง webhook → 500 → LINE retry → พังซ้ำไม่รู้จบ
+  it.each([8_640_000_000_000_001, -8_640_000_000_000_001, Number.MAX_SAFE_INTEGER])(
+    'timestamp %s → ทิ้ง',
+    (timestamp) => {
+      expect(parseLineEvents(payload(textEvent({ timestamp })))).toEqual([])
+    },
+  )
+
+  it('ขอบพอดียังอ่านได้', () => {
+    expect(parseLineEvents(payload(textEvent({ timestamp: 8_640_000_000_000_000 })))).toHaveLength(1)
+  })
+})

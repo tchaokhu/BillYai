@@ -63,8 +63,12 @@ describe('decideReply — ของที่ยังไม่มีต้อง
     })
   })
 
-  it.each(['group', 'direct'] as const)('จดบิลยังทำไม่ได้ใน %s — M6 ถึงจะได้', (surface) => {
-    expect(decideReply({ surface, addressed: false }, expense)).toEqual({ kind: 'not-available', what: 'expense' })
+  it.each(['group', 'direct'] as const)('บิลกลายเป็นเจตนาสร้างการ์ดใน %s', (surface) => {
+    // ตัว `decideReply` ไม่แตะ I/O — ยอดกับป้าย `(ใหม่)` ต้องรอ Roster
+    expect(decideReply({ surface, addressed: false }, expense)).toEqual({
+      kind: 'draft',
+      draft: DRAFT,
+    })
   })
 
   it('คำสั่งที่มี args ยังไม่เปิดใช้ ต่อให้ตัวคำสั่งจะเปิดแล้ว (D34)', () => {

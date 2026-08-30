@@ -82,3 +82,14 @@ describe('parseDraftPayload — payload ที่เชื่อไม่ได�
     }
   })
 })
+
+describe('น้ำหนักต้องอยู่ในช่วงที่ `distribute` รองรับจริง', () => {
+  // ไม่ใช่แค่ "มากกว่าศูนย์" — payload ที่เขียนลงตารางได้วันนี้ต้องคำนวณได้ตอน commit
+  it.each([1e-7, 1e21, 0.0001, 100000])('น้ำหนัก %s ไม่ผ่าน', (weight) => {
+    expect(parseDraftPayload(withField('participants', [{ name: 'กอล์ฟ', weight }]))).toBeNull()
+  })
+
+  it.each([1, 2, 1.5, 0.001, 99999.999])('น้ำหนัก %s ผ่าน', (weight) => {
+    expect(parseDraftPayload(withField('participants', [{ name: 'กอล์ฟ', weight }]))).not.toBeNull()
+  })
+})

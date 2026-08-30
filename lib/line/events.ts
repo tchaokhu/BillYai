@@ -45,6 +45,9 @@ export type LineEvent =
       data: string
     }
 
+/** ช่วงที่ `Date` รับได้ — ±100,000,000 วันรอบ epoch (เท่ากับ `lib/time.ts`) */
+const MAX_TIME = 8_640_000_000_000_000
+
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return null
   return value as Record<string, unknown>
@@ -103,8 +106,13 @@ function parseEvent(value: unknown): LineEvent | null {
   if (replyToken === null) return null
 
   // timestamp คือที่มาเดียวของ `spentAt` (D35) — เดาแทนไม่ได้
+  //
+  // ต้องอยู่ในช่วงที่ `Date` รับได้ด้วย ไม่ใช่แค่เป็น integer: ค่าที่เกินช่วงจะทำให้
+  // `bangkokDate` โยน `RangeError` กลางเส้นทาง webhook ซึ่งกลายเป็น 500 แล้ว LINE
+  // ส่ง event ชุดเดิมกลับมาให้พังซ้ำไม่รู้จบ · ทิ้งตั้งแต่ตรงนี้จบกว่า
   const { timestamp } = event
   if (typeof timestamp !== 'number' || !Number.isSafeInteger(timestamp)) return null
+  if (Math.abs(timestamp) > MAX_TIME) return null
 
   const source = parseSource(event.source)
   if (source === null) return null

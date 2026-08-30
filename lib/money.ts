@@ -73,6 +73,27 @@ export function formatSatang(satang: number): string {
 }
 
 /**
+ * ช่วงน้ำหนักที่ทั้งระบบรองรับ — ตรงกับคอลัมน์ `expense_share.weight numeric(8,3)`
+ *
+ * มีอยู่เพราะ `weightDecimals` อ่านทศนิยมจาก `String(weight)` ซึ่งพังทันทีที่ค่า
+ * ถูกพิมพ์ออกมาเป็น exponential (`1e-7`, `1e+21`) · ถ้าปล่อยให้ค่าแบบนั้นเดินทาง
+ * มาถึงตรงนั้นได้ ผลคือ throw กลางเส้นทาง webhook ซึ่งกลายเป็น 500 แล้ว LINE ก็
+ * ส่ง event ชุดเดิมกลับมาให้ throw ซ้ำไม่รู้จบ · `กอล์ฟx0.0000001` เป็นการพิมพ์ผิด
+ * ธรรมดา ไม่ใช่ payload ที่ต้องจงใจสร้าง
+ *
+ * **ด่านนี้ต้องอยู่ต้นทาง** — ทั้ง parser และตัวตรวจ payload ของ draft เรียกตัวนี้
+ */
+const MAX_WEIGHT = 99999.999
+const MAX_WEIGHT_DECIMALS = 3
+
+export function isSupportedWeight(weight: number): boolean {
+  if (!Number.isFinite(weight) || weight <= 0 || weight > MAX_WEIGHT) return false
+  const text = String(weight)
+  if (text.includes('e') || text.includes('E')) return false
+  return (text.split('.')[1] ?? '').length <= MAX_WEIGHT_DECIMALS
+}
+
+/**
  * จำนวนทศนิยมของน้ำหนัก — อ่านจากสตริงเพราะเป็นวิธีเดียวที่บอกได้ว่า
  * float ตัวนั้น "แทน" ทศนิยมกี่ตำแหน่งจริงๆ
  */
