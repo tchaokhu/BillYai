@@ -47,8 +47,12 @@ describe('decideReply — ใน 1:1 ไม่มีบทสนทนาขอ�
 })
 
 describe('decideReply — ของที่ยังไม่มีต้องบอก ไม่ใช่เงียบ', () => {
+  it.each(['group', 'direct'] as const)('`ยอด` เปิดใช้แล้ว — กลายเป็นเจตนาอ่านยอดใน %s', (surface) => {
+    // ตัว `decideReply` ไม่แตะ I/O — ledger ต้องอ่านที่ชั้นถัดไป
+    expect(decideReply({ surface, addressed: false }, balance)).toEqual({ kind: 'balance' })
+  })
+
   it.each(['group', 'direct'] as const)('คำสั่งที่ยังไม่เปิดใช้ใน %s', (surface) => {
-    expect(decideReply({ surface, addressed: false }, balance)).toEqual({ kind: 'not-available', what: 'command' })
     expect(decideReply({ surface, addressed: false }, { kind: 'command', command: 'nudge' })).toEqual({
       kind: 'not-available',
       what: 'command',

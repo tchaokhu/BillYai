@@ -11,60 +11,14 @@
 
 import { fetchDisplayName, replyToLine } from '@/lib/line/client'
 import { readAccessToken, readChannelSecret } from '@/lib/line/env'
-import { handleLineWebhook, type GroupView } from '@/lib/line/webhook'
+import { handleLineWebhook } from '@/lib/line/webhook'
 import { confirmDraft } from '@/lib/repo/confirm'
-import { findAppUserByLineUserId } from '@/lib/repo/users'
 import { createDraft } from '@/lib/repo/drafts'
-import { findActiveGroupByLineGroupId, findPersonalGroupByOwner } from '@/lib/repo/groups'
-import { findMemberByLineUserId, listMembers } from '@/lib/repo/members'
+import { loadBalance, loadGroupView } from '@/lib/repo/views'
 
 /**
- * ทุกอย่างที่ต้องรู้เกี่ยวกับวงเพื่อวาดการ์ดหนึ่งใบ — **อ่านอย่างเดียว** (D28)
- *
- * ไม่มีวง = ว่างทั้งก้อน ซึ่งถูกต้องและเกิดบ่อยที่สุด: วงเกิดตอนกดยืนยันบิลใบแรก
- * (D30) กลุ่มที่ยังไม่มีใครยืนยันอะไรเลยจึงยังไม่มีแถวใน `ledger_group`
- */
-async function loadGroupView(
-  lineGroupId: string | null,
-  lineUserId: string,
-): Promise<GroupView> {
-  const empty: GroupView = { roster: [], payerName: null, unclaimed: [] }
-
-  // แชท 1:1 มีวงของมันเหมือนกัน — วงส่วนตัวของคนที่คุยอยู่ (D21) · ลืมข้อนี้แปลว่า
-  // คนที่จดบิลใน 1:1 มาสิบใบแล้วยังถูกถามตัวตนใหม่ทุกครั้ง และ `+ ข้าว 1200` เฉยๆ
-  // จะตอบว่า "ยังไม่รู้จักใครในวงนี้" ตลอดกาล
-  const group =
-    lineGroupId === null
-      ? await (async () => {
-          const owner = await findAppUserByLineUserId(lineUserId)
-          return owner === null ? null : findPersonalGroupByOwner(owner.id)
-        })()
-      : await findActiveGroupByLineGroupId(lineGroupId)
-  if (group === null) return empty
-
-  const members = await listMembers(group.id)
-  const payer = await findMemberByLineUserId(group.id, lineUserId)
-  return {
-    roster: members.map((member) => member.displayName),
-    payerName: payer?.displayName ?? null,
-    /**
-     * คนที่ถูก claim ไปแล้วไม่ใช่ตัวเลือก — เขามีเจ้าของอยู่แล้ว
-     *
-     * เรียง**ใหม่ก่อน** เพราะ quick reply ใส่ได้ 12 ชื่อ · คนที่กำลังจะกดเลือกชื่อ
-     * ตัวเองมักเป็นคนที่เพิ่งถูกพิมพ์ชื่อเข้ามาในบิลไม่กี่ใบก่อนหน้า ไม่ใช่คนที่อยู่
-     * ในวงมาตั้งแต่แรก · **ยังไม่แก้ปัญหาวงที่มีคนยังไม่ claim เกิน 12 คนได้ทั้งหมด**
-     * — ดูของค้างท้าย `docs/PLAN-M6.md`
-     */
-    unclaimed: members
-      .filter((m) => m.appUserId === null)
-      .reverse()
-      .map((m) => ({ id: m.id, name: m.displayName })),
-  }
-}
-
-/**
- * ยังเป็น node runtime — M5 เป็นต้นไปต่อ Postgres ด้วย `pg` ซึ่ง edge รันไม่ได้ (D24)
- * และการสลับ runtime ไปมาระหว่างเฟสไม่ได้ประโยชน์อะไร
+ * ยังต้องเป็น node runtime — เส้นทางนี้ต่อ Postgres ด้วย `pg` และ `lib/line/flex.ts`
+ * เรียก `Buffer.byteLength` ซึ่ง edge รันไม่ได้ทั้งคู่ (D24)
  */
 export const runtime = 'nodejs'
 
@@ -74,9 +28,6 @@ export const dynamic = 'force-dynamic'
 /**
  * region ตั้งที่ `vercel.json` (`sin1`) ไม่ใช่ที่ไฟล์นี้ — `preferredRegion` ของ
  * route segment ถูก deprecate ใน Next 16 แล้ว
- *
- * S4 บันทึกไว้เองว่า region สำคัญกว่า cold start — default ของ Vercel ไม่ใช่สิงคโปร์
- * ผู้ใช้อยู่ไทย และ Supabase ที่สร้างไว้ก็อยู่ `ap-southeast-1` ให้ตรงกัน
  */
 
 export async function POST(request: Request): Promise<Response> {
@@ -137,6 +88,7 @@ export async function POST(request: Request): Promise<Response> {
       },
       fetchDisplayName: (lineGroupId, lineUserId) =>
         fetchDisplayName({ lineGroupId, lineUserId, accessToken }, { fetch }),
+      loadBalance,
     },
   )
 

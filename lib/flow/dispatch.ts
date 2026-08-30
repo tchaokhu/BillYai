@@ -46,14 +46,21 @@ export type ReplyPlan =
   | { kind: 'no-display-name' }
   /** กดยืนยันมาโดยยังไม่ได้เลือกว่าเป็นใคร — ปกติไม่เกิด เพราะการ์ดไม่มีปุ่มให้กด */
   | { kind: 'needs-identity' }
+  /** ต้องอ่าน ledger ก่อนถึงจะตอบได้ — ผู้เรียกเป็นคนไป I/O ต่อ */
+  | { kind: 'balance' }
+  /** มีบิลแล้วแต่ไม่มีใครติดใคร — คนละเรื่องกับวงที่ยังไม่เคยจดบิล */
+  | { kind: 'settled' }
 
 /**
  * คำสั่งที่ลงของจริงแล้ว — M4 มีแค่ไกด์
  *
- * M7 เติม `balance` · Phase 2 เติม `nudge` · Phase 3 เติม `edit` กับ `undo`
+ * Phase 2 เติม `nudge` · Phase 3 เติม `edit` กับ `undo`
  * พอเติมแล้วข้อความ "ยังไม่เปิดใช้" หายไปเองโดยไม่ต้องแก้ที่อื่น
  */
-export const IMPLEMENTED_COMMANDS: ReadonlySet<BotCommand> = new Set<BotCommand>(['guide'])
+export const IMPLEMENTED_COMMANDS: ReadonlySet<BotCommand> = new Set<BotCommand>([
+  'guide',
+  'balance',
+])
 
 export function decideReply(context: ReplyContext, parsed: ParseResult | null): ReplyPlan {
   if (parsed === null || parsed.kind === 'unparsed') {
@@ -76,6 +83,9 @@ export function decideReply(context: ReplyContext, parsed: ParseResult | null): 
   if (!IMPLEMENTED_COMMANDS.has(parsed.command)) {
     return { kind: 'not-available', what: 'command' }
   }
+
+  // `ยอด` ต้องอ่าน ledger ซึ่งเป็น I/O — ไฟล์นี้ตัดสินอย่างเดียว ไม่ไปหยิบข้อมูลเอง
+  if (parsed.command === 'balance') return { kind: 'balance' }
 
   return { kind: 'guide' }
 }

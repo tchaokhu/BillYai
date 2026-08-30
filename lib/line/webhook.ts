@@ -10,10 +10,11 @@
 
 import type { ReplyOutcome } from './client'
 import { parseLineEvents, type LineEvent } from './events'
-import { draftCardMessage, type IdentityChoice } from './flex'
+import { balanceCardMessage, draftCardMessage, type IdentityChoice } from './flex'
 import { verifyLineSignature } from './signature'
 import { stripMentions } from './mention'
 import { renderReply, type LineMessage } from './messages'
+import type { BalanceView } from '../flow/balance'
 import { buildDraft } from '../flow/draft'
 import { decideReply, type Surface } from '../flow/dispatch'
 import { parseAddressedMessage, parseMessage } from '../parser/rules'
@@ -77,6 +78,14 @@ export interface LineWebhookDeps {
   }) => Promise<ConfirmOutcome>
   /** ชื่อที่คนตั้งไว้ใน LINE — `null` = ดึงไม่ได้ ห้ามเดาแทน */
   fetchDisplayName: (lineGroupId: string | null, lineUserId: string) => Promise<string | null>
+  /**
+   * ยอดค้างทั้งวง · `'no-bills'` = วงยังไม่มีบิลสักใบ ซึ่งตอบไกด์ ไม่ใช่ตอบว่าเป็น
+   * ศูนย์ (`docs/DESIGN.md` §3)
+   */
+  loadBalance: (
+    lineGroupId: string | null,
+    lineUserId: string,
+  ) => Promise<BalanceView | 'no-bills'>
   /** นาฬิกาหน่วย ms — แยกออกมาเพื่อให้เทสต์กำหนดค่าได้ */
   now?: () => number
 }
@@ -124,6 +133,20 @@ async function messagesFor(event: LineEvent, deps: LineWebhookDeps): Promise<Lin
   const { text, mentionsBot } = stripMentions(event.text, event.mentionees)
   const parsed = mentionsBot ? parseAddressedMessage(text) : parseMessage(text)
   const plan = decideReply({ surface: surfaceOf(event), addressed: mentionsBot }, parsed)
+
+  if (plan.kind === 'balance') {
+    // ด่านเดียวกับเส้นทางจดบิล — ไม่รู้ว่าใครพิมพ์ก็หาวงส่วนตัวของเขาไม่ได้ และการ
+    // ยิง query ด้วย id ว่างจะได้ `no-bills` ซึ่งพาไปตอบไกด์แทนที่จะบอกสาเหตุจริง
+    if (event.source.lineUserId === null) return renderReply({ kind: 'unknown-sender' })
+    const lineGroupId = event.source.kind === 'group' ? event.source.lineGroupId : null
+    const view = await deps.loadBalance(lineGroupId, event.source.lineUserId)
+    // วงที่ยังไม่เคยจดบิลตอบไกด์ ไม่ใช่ตอบว่ายอดเป็นศูนย์ — คนที่ยังไม่เคยใช้
+    // ต้องการวิธีใช้ ไม่ใช่ตัวเลข
+    if (view === 'no-bills') return renderReply({ kind: 'guide' })
+    if (view.kind === 'settled') return renderReply({ kind: 'settled' })
+    return balanceCardMessage(view.blocks)
+  }
+
   if (plan.kind !== 'draft') return renderReply(plan)
 
   const lineGroupId = event.source.kind === 'group' ? event.source.lineGroupId : null
