@@ -1,0 +1,51 @@
+/**
+ * time — ขอบวันของระบบ
+ *
+ * ระบบนี้ตัดวันด้วยเวลาไทยทุกที่ ไม่ใช่ UTC (UTC ตัดวันตอนตี 7 ของไทย) และไม่ใช่
+ * เวลาท้องถิ่นของเครื่องที่รัน ซึ่งบน Vercel ไม่มีใครรับประกันว่าคืออะไร
+ *
+ * ชื่อโซนสะกดว่า `Asia/Bangkok` เหมือนที่ `lib/repo/llm.ts` เขียนไว้ฝั่ง SQL —
+ * grep คำเดียวต้องเจอทุกที่ที่ระบบตัดสินขอบวัน
+ */
+
+/**
+ * ตัวจัดรูปแบบสร้างครั้งเดียวระดับโมดูล — `Intl.DateTimeFormat` แพงพอที่จะไม่ควร
+ * สร้างใหม่ทุกข้อความ
+ *
+ * ระบุ `calendar` กับ `numberingSystem` ตรงๆ ไม่ปล่อยตาม locale: `th-TH` ให้ปี
+ * พุทธศักราชและเลขไทย ซึ่งจะกลายเป็น `2569-08-30` ลง `date` ของ Postgres เงียบๆ
+ */
+const BANGKOK = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'Asia/Bangkok',
+  calendar: 'gregory',
+  numberingSystem: 'latn',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+})
+
+/**
+ * วันที่ตามเวลาไทยของ epoch ms — คืน `'YYYY-MM-DD'` ตรงรูปแบบที่ `spent_at` รับ
+ *
+ * รับ epoch ms เพราะนั่นคือสิ่งที่ webhook ของ LINE ส่งมา (`event.timestamp`) และ
+ * เป็นค่าที่ไม่มีทางตีความ timezone ผิด ต่างจากสตริงวันที่
+ */
+export function bangkokDate(epochMs: number): string {
+  if (!Number.isSafeInteger(epochMs)) {
+    throw new Error(`epoch ms ต้องเป็น integer — ได้ ${epochMs}`)
+  }
+
+  let year = ''
+  let month = ''
+  let day = ''
+  for (const part of BANGKOK.formatToParts(new Date(epochMs))) {
+    if (part.type === 'year') year = part.value
+    else if (part.type === 'month') month = part.value
+    else if (part.type === 'day') day = part.value
+  }
+
+  // ประกอบเองจาก parts ไม่ใช่ `format()` เพราะลำดับและตัวคั่นเป็นของ locale
+  // ส่วนรูปแบบที่เราต้องการเป็นของ Postgres — สองอย่างนี้ไม่ควรผูกกัน
+  // ไม่ต้อง pad เอง: `2-digit` เติมศูนย์ให้แล้ว และปีของระบบนี้เป็นสี่หลักเสมอ
+  return `${year}-${month}-${day}`
+}
