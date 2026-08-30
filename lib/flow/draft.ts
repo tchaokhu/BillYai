@@ -53,7 +53,15 @@ export type DraftOutcome =
    */
   | { kind: 'need-names' }
 
-export function buildDraft(draft: ExpenseDraft, roster: readonly string[]): DraftOutcome {
+/**
+ * @param payerName ชื่อ Member ของคนพิมพ์ในวงนี้ · `null` = เขายังไม่เคยยืนยันตัวตน
+ *   จึงยังไม่มีชื่ออยู่ใน Roster และการ์ดต้องเรียกเขาว่า `คุณ` ไปก่อน (ADR 0002)
+ */
+export function buildDraft(
+  draft: ExpenseDraft,
+  roster: readonly string[],
+  payerName: string | null,
+): DraftOutcome {
   const known = new Set(roster.map((name) => name.trim()))
 
   // ชื่อที่พิมพ์มาอาจมีช่องว่างติดมา — เทียบกับ Roster หลัง trim ทั้งสองฝั่ง
@@ -63,12 +71,25 @@ export function buildDraft(draft: ExpenseDraft, roster: readonly string[]): Draf
   const lines: Array<Omit<DraftLine, 'amountSatang'> & { key: string }> = []
 
   if (named.length === 0) {
-    // "หารเท่าทุกคนใน Roster" — คนพิมพ์อยู่ใน Roster แล้วถ้าเคยยืนยันตัวตน
-    // จึงไม่เพิ่มแถว `คุณ` ซ้ำเข้าไปอีก
+    /**
+     * "หารเท่าทุกคน" — **คนจ่ายนับเป็นหนึ่งในนั้นเสมอ**
+     *
+     * คนที่ยืนยันตัวตนแล้วมีชื่ออยู่ใน Roster ไปเรียบร้อย จึงไม่ต้องเพิ่มแถวซ้ำ
+     * ส่วนคนที่ยังไม่ยืนยันได้แถวของตัวเองในนาม `คุณ` — เขาก็กินด้วย การตัดเขา
+     * ออกเพราะยังไม่ได้ claim คือให้คำตอบที่ผิดด้วยเหตุผลทางเทคนิคล้วนๆ
+     *
+     * นี่ยังเป็นตัวที่ทำให้ `รวมฉัน` ไม่กลายเป็นคำที่ไม่มีผล: parser ยุบ
+     * `+ ข้าว 1200` กับ `+ ข้าว 1200 รวมฉัน` เป็น draft เดียวกัน ทั้งคู่จึงต้อง
+     * ให้ผลเดียวกันที่ "รวมคนจ่าย" ไม่ใช่ "ไม่รวม"
+     */
     if (known.size === 0) return { kind: 'need-names' }
     for (const name of known) {
       participants.push({ memberId: name, weight: 1 })
       lines.push({ key: name, name, isNew: false })
+    }
+    if (payerName === null) {
+      participants.push({ memberId: PAYER_KEY, weight: 1 })
+      lines.push({ key: PAYER_KEY, name: PAYER_LABEL, isNew: false })
     }
   } else {
     for (const participant of named) {
@@ -83,7 +104,7 @@ export function buildDraft(draft: ExpenseDraft, roster: readonly string[]): Draf
       participants.push({ memberId: PAYER_KEY, weight: 1 })
       // ไม่ติดป้าย `(ใหม่)` ให้คนพิมพ์ — ป้ายนั้นมีไว้เตือนว่า "พิมพ์ชื่อผิดหรือเปล่า"
       // ซึ่งไม่ใช่คำถามที่ตอบได้ตอนยังไม่รู้ว่าเขาคือใครในวง
-      lines.push({ key: PAYER_KEY, name: PAYER_LABEL, isNew: false })
+      lines.push({ key: PAYER_KEY, name: payerName ?? PAYER_LABEL, isNew: false })
     }
   }
 

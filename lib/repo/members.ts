@@ -67,6 +67,31 @@ export async function findMemberByName(
  * รวมคนที่ออกจากกลุ่มไปแล้วเช่นกัน: เขากลับมาพิมพ์ในกลุ่มเมื่อไหร่ต้องเจอตัวเดิม
  * พร้อมหนี้เดิม ไม่ใช่ถูกสร้างใหม่เป็นคนที่สอง
  */
+/**
+ * คนพิมพ์คือ Member ตัวไหนในวงนี้ — join ผ่าน `app_user.line_user_id`
+ *
+ * `null` แปลว่า **เขายังไม่เคยยืนยันตัวตนในวงนี้** ซึ่งเป็นสัญญาณที่ D29 ใช้ตัดสิน
+ * ว่าการ์ด Draft ใบนี้ต้องมีแถวเลือกตัวตนหรือไม่
+ *
+ * ถามด้วย `line_user_id` ไม่ใช่ `app_user_id` เพราะ webhook ให้มาแค่ตัวแรก และ
+ * การให้ผู้เรียกไปหา `app_user` เองก่อนจะทำให้ต้องสร้างแถว `app_user` ทิ้งไว้
+ * สำหรับคนที่ยังไม่ได้ยืนยันอะไรเลย ซึ่งขัด D30
+ */
+export async function findMemberByLineUserId(
+  groupId: string,
+  lineUserId: string,
+  db?: Queryable,
+): Promise<Member | null> {
+  const { rows } = await q(db).query<MemberRow>(
+    `select ${COLUMNS.split(',').map((c) => `m.${c.trim()}`).join(', ')}
+       from member m
+       join app_user u on u.id = m.app_user_id
+      where m.group_id = $1 and u.line_user_id = $2`,
+    [groupId, lineUserId],
+  )
+  return firstOrNull(rows)
+}
+
 export async function findMemberByAppUser(
   groupId: string,
   appUserId: string,

@@ -30,14 +30,18 @@ function firstText(messages: readonly LineMessage[]): string | null {
 }
 
 /** DB ปลอม — เทสต์ยูนิตห้ามแตะ Postgres จริง */
-function fakeDb(roster: readonly string[] = []) {
+function fakeDb(roster: readonly string[] = [], payerName: string | null = null) {
   const saved: Array<Parameters<LineWebhookDeps['saveDraft']>[0]> = []
-  const loadRoster = vi.fn(async () => roster)
+  const viewed: Array<{ lineGroupId: string | null; lineUserId: string }> = []
+  const loadGroupView = vi.fn(async (lineGroupId: string | null, lineUserId: string) => {
+    viewed.push({ lineGroupId, lineUserId })
+    return { roster, payerName, unclaimed: roster }
+  })
   const saveDraft = vi.fn(async (input: Parameters<LineWebhookDeps['saveDraft']>[0]) => {
     saved.push(input)
     return `draft-${saved.length}`
   })
-  return { saved, loadRoster, saveDraft }
+  return { saved, viewed, loadGroupView, saveDraft }
 }
 
 /** นาฬิกาปลอมที่เดินทีละ 1 ms ทุกครั้งที่ถูกอ่าน — ทำให้ค่าเวลาคาดเดาได้ */
@@ -72,7 +76,7 @@ async function run(events: unknown[], outcome?: ReplyOutcome, roster: readonly s
   const db = fakeDb(roster)
   const result = await handleLineWebhook(
     { rawBody: body, signature: sign(body), channelSecret: SECRET },
-    { reply: fake.reply, loadRoster: db.loadRoster, saveDraft: db.saveDraft, now: fakeClock() },
+    { reply: fake.reply, loadGroupView: db.loadGroupView, saveDraft: db.saveDraft, now: fakeClock() },
   )
   return { result, ...fake, ...db }
 }
@@ -325,14 +329,14 @@ describe('handleLineWebhook — ตั้งค่าผิดต้องดั
 })
 
 describe('handleLineWebhook — เส้นทางสร้าง draft (M5)', () => {
-  it('อ่าน Roster ของกลุ่มที่ข้อความมา', async () => {
-    const { loadRoster } = await run([groupText('+ ข้าว 1200 กอล์ฟ')])
-    expect(loadRoster).toHaveBeenCalledWith(GROUP_ID)
+  it('อ่านวงของกลุ่มที่ข้อความมา พร้อมบอกว่าใครถาม', async () => {
+    const { viewed } = await run([groupText('+ ข้าว 1200 กอล์ฟ')])
+    expect(viewed).toEqual([{ lineGroupId: GROUP_ID, lineUserId: USER_ID }])
   })
 
   it('แชท 1:1 ไม่มีกลุ่มให้อ่าน', async () => {
-    const { loadRoster, saved } = await run([directText('+ ข้าว 1200 โอ๋ บาส')])
-    expect(loadRoster).toHaveBeenCalledWith(null)
+    const { viewed, saved } = await run([directText('+ ข้าว 1200 โอ๋ บาส')])
+    expect(viewed[0]?.lineGroupId).toBeNull()
     expect(saved[0]?.lineGroupId).toBeNull()
   })
 
@@ -365,12 +369,13 @@ describe('handleLineWebhook — เส้นทางสร้าง draft (M5)'
     expect(firstText(calls[0]?.messages ?? [])).toContain('ยังไม่รู้จักใครในวงนี้')
   })
 
-  it('Roster ที่มีคนอยู่แล้ว หารให้ครบทุกคนโดยไม่ต้องพิมพ์ชื่อ', async () => {
+  it('Roster ที่มีคนอยู่แล้ว หารให้ครบทุกคน รวมคนพิมพ์ที่ยังไม่ยืนยันตัวตน', async () => {
     const { calls, saved } = await run([groupText('+ ข้าว 1200')], undefined, ['กอล์ฟ', 'ตูน'])
     expect(saved).toHaveLength(1)
     const json = JSON.stringify(calls[0]?.messages)
     expect(json).toContain('กอล์ฟ')
-    expect(json).toContain('฿600')
+    // กอล์ฟ + ตูน + คนพิมพ์ = 3 คน
+    expect(json).toContain('฿400')
   })
 
   it('กลุ่มที่ LINE ไม่บอกว่าใครพิมพ์ → บอกตรงๆ ไม่เขียน draft', async () => {
@@ -395,7 +400,7 @@ describe('handleLineWebhook — DB ล่มตอนยังไม่ได้
       { rawBody: body, signature: sign(body), channelSecret: SECRET },
       {
         reply: fake.reply,
-        loadRoster: async () => {
+        loadGroupView: async () => {
           throw new Error('connection refused')
         },
         saveDraft: async () => 'ไม่ควรถูกเรียก',
@@ -413,7 +418,7 @@ describe('handleLineWebhook — DB ล่มตอนยังไม่ได้
       { rawBody: body, signature: sign(body), channelSecret: SECRET },
       {
         reply: fake.reply,
-        loadRoster: async () => [],
+        loadGroupView: async () => ({ roster: [], payerName: null, unclaimed: [] }),
         saveDraft: async () => {
           throw new Error('connection refused')
         },
@@ -433,7 +438,7 @@ describe('handleLineWebhook — DB ล่มตอนยังไม่ได้
       { rawBody: body, signature: sign(body), channelSecret: SECRET },
       {
         reply: fake.reply,
-        loadRoster: async () => {
+        loadGroupView: async () => {
           throw new Error('connection refused')
         },
         saveDraft: async () => 'ไม่ควรถูกเรียก',
@@ -454,7 +459,7 @@ describe('handleLineWebhook — DB ล่มตอนยังไม่ได้
       { rawBody: body, signature: sign(body), channelSecret: SECRET },
       {
         reply: fake.reply,
-        loadRoster: async () => {
+        loadGroupView: async () => {
           throw new Error('connection refused')
         },
         saveDraft: async () => 'ไม่ควรถูกเรียก',

@@ -11,23 +11,34 @@
 
 import { replyToLine } from '@/lib/line/client'
 import { readAccessToken, readChannelSecret } from '@/lib/line/env'
-import { handleLineWebhook } from '@/lib/line/webhook'
+import { handleLineWebhook, type GroupView } from '@/lib/line/webhook'
 import { createDraft } from '@/lib/repo/drafts'
 import { findActiveGroupByLineGroupId } from '@/lib/repo/groups'
-import { listMembers } from '@/lib/repo/members'
+import { findMemberByLineUserId, listMembers } from '@/lib/repo/members'
 
 /**
- * ชื่อทุกคนที่วงรู้จัก ณ ตอนนี้ — **อ่านอย่างเดียว** (D28)
+ * ทุกอย่างที่ต้องรู้เกี่ยวกับวงเพื่อวาดการ์ดหนึ่งใบ — **อ่านอย่างเดียว** (D28)
  *
- * ไม่มีวง = Roster ว่าง ซึ่งถูกต้องและเกิดบ่อยที่สุด: วงเกิดตอนกดยืนยันบิลใบแรก
+ * ไม่มีวง = ว่างทั้งก้อน ซึ่งถูกต้องและเกิดบ่อยที่สุด: วงเกิดตอนกดยืนยันบิลใบแรก
  * (D30) กลุ่มที่ยังไม่มีใครยืนยันอะไรเลยจึงยังไม่มีแถวใน `ledger_group`
  */
-async function loadRoster(lineGroupId: string | null): Promise<readonly string[]> {
-  if (lineGroupId === null) return []
+async function loadGroupView(
+  lineGroupId: string | null,
+  lineUserId: string,
+): Promise<GroupView> {
+  const empty: GroupView = { roster: [], payerName: null, unclaimed: [] }
+  if (lineGroupId === null) return empty
   const group = await findActiveGroupByLineGroupId(lineGroupId)
-  if (group === null) return []
+  if (group === null) return empty
+
   const members = await listMembers(group.id)
-  return members.map((member) => member.displayName)
+  const payer = await findMemberByLineUserId(group.id, lineUserId)
+  return {
+    roster: members.map((member) => member.displayName),
+    payerName: payer?.displayName ?? null,
+    // คนที่ถูก claim ไปแล้วไม่ใช่ตัวเลือก — เขามีเจ้าของอยู่แล้ว
+    unclaimed: members.filter((m) => m.appUserId === null).map((m) => m.displayName),
+  }
 }
 
 /**
@@ -88,7 +99,7 @@ export async function POST(request: Request): Promise<Response> {
         canReply
           ? replyToLine({ replyToken, messages, accessToken }, { fetch })
           : { ok: false, reason: 'no-access-token' },
-      loadRoster,
+      loadGroupView,
       /**
        * ตอบกลับไม่ได้ก็อย่าเพิ่งเขียน — draft ที่ลงตารางแล้วแต่ไม่มีการ์ดให้กด
        * คือแถวที่ไม่มีใครเข้าถึงได้จนกว่าจะหมดอายุ และ retry จะสร้างเพิ่มอีกใบ

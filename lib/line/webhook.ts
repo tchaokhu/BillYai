@@ -39,10 +39,24 @@ export interface SaveDraftInput {
   spentAt: string
 }
 
+/**
+ * ทุกอย่างที่ต้องรู้เกี่ยวกับวงเพื่อวาดการ์ดหนึ่งใบ — **อ่านอย่างเดียว** (D28)
+ *
+ * รวมเป็นก้อนเดียวเพราะทั้งสามค่ามาจาก query ชุดเดียวกัน และแยกเรียกจะกลายเป็น
+ * round trip สองรอบบนเส้นทางร้อนของทุกบิล
+ */
+export interface GroupView {
+  /** ชื่อ Member ทุกคนที่วงรู้จัก ณ ตอนนี้ */
+  roster: readonly string[]
+  /** ชื่อ Member ของคนพิมพ์ · `null` = เขายังไม่เคยยืนยันตัวตนในวงนี้ (D29) */
+  payerName: string | null
+  /** ชื่อ Member ที่ยังไม่มีเจ้าของ — ตัวเลือกตอนถามตัวตน (ADR 0002) */
+  unclaimed: readonly string[]
+}
+
 export interface LineWebhookDeps {
   reply: (replyToken: string, messages: readonly LineMessage[]) => Promise<ReplyOutcome>
-  /** ชื่อ Member ทั้งหมดที่วงรู้จัก ณ ตอนนี้ — **อ่านอย่างเดียว** (D28) */
-  loadRoster: (lineGroupId: string | null) => Promise<readonly string[]>
+  loadGroupView: (lineGroupId: string | null, lineUserId: string) => Promise<GroupView>
   /** คืน id ของ draft ที่เพิ่งเขียน — ใช้เป็น postback data */
   saveDraft: (input: SaveDraftInput) => Promise<string>
   /** นาฬิกาหน่วย ms — แยกออกมาเพื่อให้เทสต์กำหนดค่าได้ */
@@ -106,8 +120,8 @@ async function messagesFor(event: LineEvent, deps: LineWebhookDeps): Promise<Lin
   }
 
   // **อ่าน Roster ตอน draft ไม่เขียน** (D28) — ชื่อที่วงยังไม่รู้จักติดป้าย (ใหม่)
-  const roster = await deps.loadRoster(lineGroupId)
-  const outcome = buildDraft(plan.draft, roster)
+  const view = await deps.loadGroupView(lineGroupId, lineUserId)
+  const outcome = buildDraft(plan.draft, view.roster, view.payerName)
   if (outcome.kind === 'need-names') return renderReply({ kind: 'need-names' })
 
   const draftId = await deps.saveDraft({

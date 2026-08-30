@@ -25,7 +25,7 @@ function sum(lines: ReadonlyArray<{ amountSatang: number }>): number {
 
 describe('buildDraft — ระบุชื่อคนหาร', () => {
   it('หารเฉพาะคนที่ถูกเอ่ยชื่อ คนจ่ายไม่อยู่ในรายการ', () => {
-    const result = buildDraft(draft({ participants: named('กอล์ฟ', 'ตูน'), includesPayer: false }), [])
+    const result = buildDraft(draft({ participants: named('กอล์ฟ', 'ตูน'), includesPayer: false }), [], null)
     expect(result.kind).toBe('card')
     if (result.kind !== 'card') return
     expect(result.card.lines).toEqual([
@@ -34,10 +34,21 @@ describe('buildDraft — ระบุชื่อคนหาร', () => {
     ])
   })
 
+  it('คนจ่ายที่ยืนยันตัวตนแล้วโผล่ด้วยชื่อจริง ไม่ใช่คำว่า "คุณ"', () => {
+    const result = buildDraft(
+      draft({ totalSatang: 90000, participants: named('เบียร์', 'ตูน'), includesPayer: true }),
+      ['กอล์ฟ'],
+      'กอล์ฟ',
+    )
+    if (result.kind !== 'card') throw new Error('ต้องได้การ์ด')
+    expect(result.card.lines.map((l) => l.name)).toEqual(['เบียร์', 'ตูน', 'กอล์ฟ'])
+  })
+
   it('`รวมฉัน` เพิ่มคนจ่ายเป็นอีกหนึ่งแถว', () => {
     const result = buildDraft(
       draft({ totalSatang: 90000, participants: named('กอล์ฟ', 'ตูน'), includesPayer: true }),
       [],
+      null,
     )
     if (result.kind !== 'card') throw new Error('ต้องได้การ์ด')
     expect(result.card.lines.map((l) => l.name)).toEqual(['กอล์ฟ', 'ตูน', PAYER_LABEL])
@@ -45,7 +56,7 @@ describe('buildDraft — ระบุชื่อคนหาร', () => {
   })
 
   it('คนจ่ายไม่เคยติดป้าย (ใหม่) — ยังไม่รู้ว่าเขาคือใครในวง', () => {
-    const result = buildDraft(draft({ participants: named('กอล์ฟ'), includesPayer: true }), [])
+    const result = buildDraft(draft({ participants: named('กอล์ฟ'), includesPayer: true }), [], null)
     if (result.kind !== 'card') throw new Error('ต้องได้การ์ด')
     expect(result.card.lines.find((l) => l.name === PAYER_LABEL)?.isNew).toBe(false)
   })
@@ -64,6 +75,7 @@ describe('buildDraft — ระบุชื่อคนหาร', () => {
         ],
       }),
       [],
+      null,
     )
     if (result.kind !== 'card') throw new Error('ต้องได้การ์ด')
     expect(result.card.lines).toHaveLength(3)
@@ -84,6 +96,7 @@ describe('buildDraft — ระบุชื่อคนหาร', () => {
         ],
       }),
       [],
+      null,
     )
     if (result.kind !== 'card') throw new Error('ต้องได้การ์ด')
     expect(result.card.lines.map((l) => l.amountSatang)).toEqual([400000, 200000, 200000])
@@ -92,27 +105,42 @@ describe('buildDraft — ระบุชื่อคนหาร', () => {
 
 describe('buildDraft — ไม่ระบุชื่อใครเลย', () => {
   it('หารทุกคนใน Roster', () => {
-    const result = buildDraft(draft(), ['กอล์ฟ', 'ตูน', 'เบียร์'])
+    const result = buildDraft(draft(), ['กอล์ฟ', 'ตูน', 'เบียร์'], 'กอล์ฟ')
     if (result.kind !== 'card') throw new Error('ต้องได้การ์ด')
     expect(result.card.lines.map((l) => l.name)).toEqual(['กอล์ฟ', 'ตูน', 'เบียร์'])
     expect(result.card.lines.every((l) => l.amountSatang === 40000)).toBe(true)
   })
 
   it('ทุกคนใน Roster ไม่ติดป้าย (ใหม่) เพราะวงรู้จักอยู่แล้ว', () => {
-    const result = buildDraft(draft(), ['กอล์ฟ', 'ตูน'])
+    const result = buildDraft(draft(), ['กอล์ฟ', 'ตูน'], 'กอล์ฟ')
     if (result.kind !== 'card') throw new Error('ต้องได้การ์ด')
     expect(result.card.lines.every((l) => l.isNew === false)).toBe(true)
   })
 
-  it('ไม่เพิ่มแถว "คุณ" — คนจ่ายอยู่ใน Roster แล้วถ้าเคยยืนยันตัวตน', () => {
-    const result = buildDraft(draft(), ['กอล์ฟ', 'ตูน'])
+  it('คนจ่ายที่ยืนยันตัวตนแล้วไม่ได้แถวซ้ำ — เขาอยู่ใน Roster ไปแล้ว', () => {
+    const result = buildDraft(draft(), ['กอล์ฟ', 'ตูน'], 'กอล์ฟ')
     if (result.kind !== 'card') throw new Error('ต้องได้การ์ด')
-    expect(result.card.lines.map((l) => l.name)).not.toContain(PAYER_LABEL)
+    expect(result.card.lines.map((l) => l.name)).toEqual(['กอล์ฟ', 'ตูน'])
+  })
+
+  it('คนจ่ายที่ยังไม่ยืนยันตัวตนได้แถวของตัวเอง — เขาก็กินด้วย', () => {
+    // ตัดเขาออกเพราะยังไม่ได้ claim คือให้คำตอบผิดด้วยเหตุผลทางเทคนิคล้วนๆ
+    // และเป็นตัวที่ทำให้ `รวมฉัน` กลายเป็นคำที่ไม่มีผล
+    const result = buildDraft(draft({ totalSatang: 90000 }), ['กอล์ฟ', 'ตูน'], null)
+    if (result.kind !== 'card') throw new Error('ต้องได้การ์ด')
+    expect(result.card.lines.map((l) => l.name)).toEqual(['กอล์ฟ', 'ตูน', PAYER_LABEL])
+    expect(result.card.lines.every((l) => l.amountSatang === 30000)).toBe(true)
+  })
+
+  it('`รวมฉัน` ที่ไม่ระบุชื่อใครให้ผลเดียวกับไม่พิมพ์ — ทั้งคู่รวมคนจ่าย', () => {
+    const plain = buildDraft(draft(), ['กอล์ฟ'], null)
+    const explicit = buildDraft(draft({ includesPayer: true }), ['กอล์ฟ'], null)
+    expect(plain).toEqual(explicit)
   })
 
   it('Roster ว่าง = ยังไม่รู้จักใคร ต้องขอชื่อ ไม่ใช่สร้างการ์ด', () => {
     // การ์ดที่มีแต่คนจ่ายคนเดียวคือบิลที่ไม่มีหนี้อยู่ในนั้น กดยืนยันแล้วไม่ได้อะไร
-    expect(buildDraft(draft(), [])).toEqual({ kind: 'need-names' })
+    expect(buildDraft(draft(), [], null)).toEqual({ kind: 'need-names' })
   })
 })
 
@@ -122,6 +150,7 @@ describe('buildDraft — ป้าย (ใหม่) ตาม D28', () => {
     const result = buildDraft(
       draft({ participants: named('กอล์ฟ', 'กอล์ป'), includesPayer: false }),
       ['กอล์ฟ'],
+      null,
     )
     if (result.kind !== 'card') throw new Error('ต้องได้การ์ด')
     expect(result.card.lines).toEqual([
@@ -131,9 +160,7 @@ describe('buildDraft — ป้าย (ใหม่) ตาม D28', () => {
   })
 
   it('ช่องว่างหัวท้ายไม่ทำให้กลายเป็นคนใหม่', () => {
-    const result = buildDraft(draft({ participants: named(' กอล์ฟ '), includesPayer: false }), [
-      'กอล์ฟ',
-    ])
+    const result = buildDraft(draft({ participants: named(' กอล์ฟ '), includesPayer: false }), ['กอล์ฟ'], null)
     if (result.kind !== 'card') throw new Error('ต้องได้การ์ด')
     expect(result.card.lines[0]?.isNew).toBe(false)
   })
@@ -144,6 +171,7 @@ describe('buildDraft — ยอดบนการ์ดต้องเป็น�
     const result = buildDraft(
       draft({ totalSatang: 120100, participants: named('ก', 'ข', 'ค'), includesPayer: false }),
       [],
+      null,
     )
     if (result.kind !== 'card') throw new Error('ต้องได้การ์ด')
     expect(sum(result.card.lines)).toBe(120100)
@@ -156,6 +184,7 @@ describe('buildDraft — ยอดบนการ์ดต้องเป็น�
       const result = buildDraft(
         draft({ totalSatang: 100003, participants: named(...names), includesPayer: false }),
         [],
+        null,
       )
       if (result.kind !== 'card') throw new Error('ต้องได้การ์ด')
       expect(sum(result.card.lines)).toBe(100003)
@@ -166,13 +195,14 @@ describe('buildDraft — ยอดบนการ์ดต้องเป็น�
     const result = buildDraft(
       draft({ participants: named('กอล์ฟ'), includesPayer: false, eventTag: 'เชียงใหม่' }),
       [],
+      null,
     )
     if (result.kind !== 'card') throw new Error('ต้องได้การ์ด')
     expect(result.card.eventTag).toBe('เชียงใหม่')
   })
 
   it('ไม่มี `eventTag` ก็ไม่มีคีย์นั้น', () => {
-    const result = buildDraft(draft({ participants: named('กอล์ฟ'), includesPayer: false }), [])
+    const result = buildDraft(draft({ participants: named('กอล์ฟ'), includesPayer: false }), [], null)
     if (result.kind !== 'card') throw new Error('ต้องได้การ์ด')
     expect('eventTag' in result.card).toBe(false)
   })
@@ -181,6 +211,7 @@ describe('buildDraft — ยอดบนการ์ดต้องเป็น�
     const result = buildDraft(
       draft({ description: 'หมูกระทะ', participants: named('กอล์ฟ'), includesPayer: false }),
       [],
+      null,
     )
     if (result.kind !== 'card') throw new Error('ต้องได้การ์ด')
     expect(result.card.description).toBe('หมูกระทะ')
