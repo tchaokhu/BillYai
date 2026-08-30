@@ -33,6 +33,7 @@ describe('ตาราง', () => {
       'app_user',
       'audit_log',
       'expense',
+      'expense_draft',
       'expense_item',
       'expense_item_share',
       'expense_share',
@@ -48,6 +49,16 @@ describe('ตาราง', () => {
 type ColumnSpec = readonly [name: string, dataType: string, nullable: boolean]
 
 const COLUMNS: Record<string, readonly ColumnSpec[]> = {
+  // ADR 0001 — ถือตัวตนฝั่ง LINE อย่างเดียว **ไม่มี `group_id` และไม่มี FK ไปวง**
+  // เพราะวงเกิดตอนกดยืนยันเสมอ ทั้งวงกลุ่มและวงส่วนตัว (D30)
+  expense_draft: [
+    ['created_at', 'timestamp with time zone', false],
+    ['id', 'uuid', false],
+    ['line_group_id', 'text', true],
+    ['line_user_id', 'text', false],
+    ['payload', 'jsonb', false],
+    ['spent_at', 'date', false],
+  ],
   app_user: [
     ['created_at', 'timestamp with time zone', false],
     ['id', 'uuid', false],
@@ -324,6 +335,8 @@ describe('index ที่แผนระบุว่าต้องมีเพ�
     expect(names).toContain('member_app_user_id_idx')
     expect(names).toContain('settlement_group_status_idx')
     expect(names).toContain('llm_usage_created_at_idx')
+    expect(names).toContain('expense_draft_line_group_id_created_at_idx')
+    expect(names).toContain('expense_draft_created_at_idx')
   })
 })
 
