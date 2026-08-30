@@ -11,12 +11,14 @@ import { afterAll, describe, expect, it } from 'vitest'
 import { closePool, getPool, withTransaction, type Queryable } from '@/lib/db/client'
 import { makeAppUser, makeGroup, makeMember, uniqueName } from '@/lib/db/fixtures'
 import type { Member } from '@/lib/db/rows'
+import { ensureAppUserByLineUserId } from './users'
 import {
   claimMember,
   ensureMember,
   ensureMembers,
   findMemberByAppUser,
   findMemberById,
+  findMemberByLineUserId,
   findMemberByLinkTokenHash,
   findMemberByName,
   issueNudgeToken,
@@ -713,5 +715,33 @@ describe('issueNudgeToken / findMemberByLinkTokenHash', () => {
 
     expect((await findMemberByLinkTokenHash(hash))?.id).toBe(withToken.id)
     expect((await findMemberById(without.id))?.linkTokenHash).toBeNull()
+  })
+})
+
+describe('findMemberByLineUserId — คนพิมพ์คือ Member ตัวไหนในวงนี้ (D29)', () => {
+  it('ยังไม่มีใคร claim คืน null', async () => {
+    const group = await makeGroup()
+    expect(await findMemberByLineUserId(group.id, `U-test-${randomUUID()}`)).toBeNull()
+  })
+
+  it('claim แล้วเจอ', async () => {
+    const group = await makeGroup()
+    const member = await ensureMember(group.id, 'กอล์ฟ')
+    const lineUserId = `U-test-${randomUUID()}`
+    const user = await ensureAppUserByLineUserId(lineUserId)
+    await claimMember(member.id, user.id)
+
+    expect((await findMemberByLineUserId(group.id, lineUserId))?.id).toBe(member.id)
+  })
+
+  it('claim ในวงหนึ่งไม่ทำให้เจอในอีกวง — Member เป็นของวง ไม่ใช่ของคน (D9)', async () => {
+    const first = await makeGroup()
+    const second = await makeGroup()
+    const member = await ensureMember(first.id, 'กอล์ฟ')
+    const lineUserId = `U-test-${randomUUID()}`
+    const user = await ensureAppUserByLineUserId(lineUserId)
+    await claimMember(member.id, user.id)
+
+    expect(await findMemberByLineUserId(second.id, lineUserId)).toBeNull()
   })
 })
