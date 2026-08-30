@@ -11,18 +11,64 @@ const COMMANDS: ReadonlyMap<string, BotCommand> = new Map([
 /** คำที่บอกว่าคนจ่ายร่วมหารด้วย — ไม่นับเป็นชื่อคน */
 const INCLUDE_PAYER = 'รวมฉัน'
 
+/**
+ * คำสั่งคำเดียว หรือคำสั่งที่ตามด้วย `#tag` เท่านั้น (D34)
+ *
+ * ที่ไม่รับคำธรรมดาต่อท้าย เพราะ `ยอด` เป็นชื่อคนได้ และ `ยอด มาไหม` คือประโยค
+ * ที่คนในกลุ่มคุยกันเอง — ตอบว่า "ยังไม่เปิดใช้" ใส่บทสนทนาแบบนั้นคือสิ่งเดียวกับ
+ * ที่กฎเงียบมีไว้กัน · `#tag` ต่างออกไปเพราะไม่มีใครพิมพ์โดยบังเอิญ
+ */
+function parseCommand(trimmed: string): ParseResult | null {
+  const tokens = trimmed.split(/\s+/).filter((t) => t.length > 0)
+  const head = tokens[0]
+  if (head === undefined) return null
+
+  const command = COMMANDS.get(head)
+  if (command === undefined) return null
+
+  const rest = tokens.slice(1)
+  if (rest.length === 0) return { kind: 'command', command }
+  if (!rest.every((t) => t.startsWith('#') && t.length > 1)) return null
+
+  // `exactOptionalPropertyTypes` เปิดอยู่ — ห้ามใส่ `args: undefined`
+  return { kind: 'command', command, args: rest.join(' ') }
+}
+
 /** คืน null = ข้อความไม่เข้า Trigger, bot ไม่สนใจ */
 export function parseMessage(text: string): ParseResult | null {
   const trimmed = text.trim()
 
-  const command = COMMANDS.get(trimmed)
-  if (command !== undefined) return { kind: 'command', command }
+  const command = parseCommand(trimmed)
+  if (command !== null) return command
 
   if (trimmed.startsWith('+')) {
     return parseExpense(trimmed.slice(1), text)
   }
 
   return null
+}
+
+/**
+ * ข้อความที่ @mention บอทแล้ว **ตัดชื่อออกไปแล้ว** (`lib/line/mention.ts`)
+ *
+ * ทางเข้าที่สองของ parser — mention คือ Trigger ไปแล้ว จึงไม่ต้องมี `+` นำหน้า
+ * และ **ไม่มีทางคืน `null`**: ถูกเรียกแล้วต้องมีคำตอบเสมอ ต่างจาก `parseMessage`
+ * ที่ `null` แปลว่าไม่ได้พูดกับเรา
+ *
+ * แยกเป็นคนละฟังก์ชันโดยตั้งใจ — `parseMessage` ถูก `lib/contract.test.ts` ล็อกไว้
+ * ทั้งชุด และการยัดโหมดที่สองเข้าไปในตัวเดิมคือการเปลี่ยนความหมายของ `null`
+ */
+export function parseAddressedMessage(text: string): ParseResult {
+  const trimmed = text.trim()
+
+  // เรียกบอทเปล่าๆ — เจตนาชัดว่าเรียก ไม่ใช่ false positive
+  if (trimmed.length === 0) return { kind: 'command', command: 'guide' }
+
+  const command = parseCommand(trimmed)
+  if (command !== null) return command
+
+  const body = trimmed.startsWith('+') ? trimmed.slice(1) : trimmed
+  return parseExpense(body, trimmed)
 }
 
 /**

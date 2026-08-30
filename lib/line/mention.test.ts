@@ -42,32 +42,47 @@ describe('stripMentions — ตำแหน่งเป็น UTF-16 code unit',
     expect(stripMentions(text, [self(2, 8)])).toEqual({ text: '😀', mentionsBot: true })
   })
 
-  it('ตัดทุก mention ไม่ว่าจะเรียกใคร แต่ `mentionsBot` ดูเฉพาะ isSelf', () => {
-    // `@All` ไม่ทำให้บอทสนใจ แต่ชื่อที่ค้างในข้อความจะทำให้ parse ไม่ออกโดยไม่จำเป็น
-    const text = '@All ปิ้งย่างเมื่อคืน'
-    expect(text.slice(0, 4)).toBe('@All')
-    expect(stripMentions(text, [other(0, 4)])).toEqual({
-      text: 'ปิ้งย่างเมื่อคืน',
-      mentionsBot: false,
-    })
+  it('mention ของคนอื่นไม่ถูกแตะ — นี่คือด่านสุดท้ายของกฎเงียบ', () => {
+    // `@กอล์ฟ เลิก` ถ้าตัดชื่อออกจะเหลือ `เลิก` ซึ่งตรงกับคำสั่งพอดี แล้วบอทจะ
+    // โพล่งใส่บทสนทนาที่ไม่ได้พูดกับมัน
+    const text = '@กอล์ฟ เลิก'
+    expect(text.slice(0, 6)).toBe('@กอล์ฟ')
+    expect(stripMentions(text, [other(0, 6)])).toEqual({ text, mentionsBot: false })
   })
 
-  it('หลาย mention ในข้อความเดียว ลำดับใน array ไม่สำคัญ', () => {
-    const text = `@All ${BOT} ยอด`
-    expect(text.slice(0, 4)).toBe('@All')
-    expect(text.slice(5, 13)).toBe(BOT)
+  it('`@All` อยู่ในข้อความต่อไป จึงไม่มีทางตรงกับคำสั่ง', () => {
+    const text = '@All ยอด'
+    expect(stripMentions(text, [other(0, 4)])).toEqual({ text, mentionsBot: false })
+  })
+
+  it('เรียกบอทสองครั้งในข้อความเดียว ลำดับใน array ไม่สำคัญ', () => {
+    const text = `${BOT} ยอด ${BOT}`
+    expect(text.slice(0, 8)).toBe(BOT)
+    expect(text.slice(13, 21)).toBe(BOT)
     // ส่งกลับหัวเพื่อพิสูจน์ว่าโค้ดเรียงเอง ไม่ได้เชื่อลำดับที่ LINE ส่งมา
-    expect(stripMentions(text, [self(5, 8), other(0, 4)])).toEqual({
+    expect(stripMentions(text, [self(13, 8), self(0, 8)])).toEqual({
       text: 'ยอด',
       mentionsBot: true,
     })
   })
 
-  it('ตำแหน่งที่เกินความยาวข้อความถูกทิ้งทั้งอัน ไม่ตัดมั่ว', () => {
+  it('เรียกบอทแล้วเอ่ยชื่อคนอื่นด้วย — ชื่อคนอื่นต้องรอดไปถึง parser', () => {
+    // `@กอล์ฟ` คือวิธีเรียกชื่อคนที่เป็นธรรมชาติที่สุดในกลุ่ม LINE · ตัดทิ้งแปลว่า
+    // ผู้ร่วมหารหายไปจากบิลเงียบๆ
+    const text = `${BOT} ข้าว 1200 @กอล์ฟ`
+    expect(stripMentions(text, [self(0, 8), other(19, 7)])).toEqual({
+      text: 'ข้าว 1200 @กอล์ฟ',
+      mentionsBot: true,
+    })
+  })
+
+  it('ตำแหน่งที่เชื่อไม่ได้ ไม่นับว่าเรียกบอทด้วย', () => {
+    // เชื่อ `isSelf` แต่ไม่เชื่อตำแหน่ง = ส่งข้อความที่ยังมี `@บิลใหญ่` ค้างอยู่
+    // เข้าทางของ `parseAddressedMessage` แล้วชื่อบอทจะกลายเป็นคำอธิบายบิล
     const text = 'ยอด'
-    expect(stripMentions(text, [self(0, 99)])).toEqual({ text: 'ยอด', mentionsBot: true })
-    expect(stripMentions(text, [self(10, 2)])).toEqual({ text: 'ยอด', mentionsBot: true })
-    expect(stripMentions(text, [self(3, 1)])).toEqual({ text: 'ยอด', mentionsBot: true })
+    expect(stripMentions(text, [self(0, 99)])).toEqual({ text: 'ยอด', mentionsBot: false })
+    expect(stripMentions(text, [self(10, 2)])).toEqual({ text: 'ยอด', mentionsBot: false })
+    expect(stripMentions(text, [self(3, 1)])).toEqual({ text: 'ยอด', mentionsBot: false })
   })
 
   it('ช่วงที่ทับกันตัดครั้งเดียว ไม่กินตัวอักษรข้างเคียง', () => {

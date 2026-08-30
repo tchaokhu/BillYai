@@ -30,9 +30,18 @@ const BANGKOK = new Intl.DateTimeFormat('en-US', {
  * รับ epoch ms เพราะนั่นคือสิ่งที่ webhook ของ LINE ส่งมา (`event.timestamp`) และ
  * เป็นค่าที่ไม่มีทางตีความ timezone ผิด ต่างจากสตริงวันที่
  */
+/**
+ * ช่วงที่ `Date` รับได้ — ±100,000,000 วันรอบ epoch ตามสเปกของภาษา
+ *
+ * `Number.isSafeInteger` ผ่านถึง 9.007e15 ซึ่งกว้างกว่านี้ ค่าที่อยู่ระหว่างสองเพดาน
+ * จะทำให้ `formatToParts` โยน `RangeError: Invalid time value` ออกมาแทน ซึ่งเป็น
+ * throw ที่ไม่มีใครดักตลอดเส้นทาง webhook
+ */
+const MAX_TIME = 8_640_000_000_000_000
+
 export function bangkokDate(epochMs: number): string {
-  if (!Number.isSafeInteger(epochMs)) {
-    throw new Error(`epoch ms ต้องเป็น integer — ได้ ${epochMs}`)
+  if (!Number.isSafeInteger(epochMs) || Math.abs(epochMs) > MAX_TIME) {
+    throw new Error(`epoch ms ต้องเป็น integer ในช่วงที่ Date รับได้ — ได้ ${epochMs}`)
   }
 
   let year = ''

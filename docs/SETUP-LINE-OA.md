@@ -79,10 +79,14 @@ https://manager.line.biz/ → เลือกบัญชีที่เพิ�
 
 ---
 
-## ขั้นที่ 4 — ปิด auto-reply และ greeting
+## ขั้นที่ 4 — ปิด auto-reply และ greeting (เฉพาะช่วง spike)
 
 **ข้อนี้ห้ามข้าม** ถ้าไม่ปิด บอทจะตอบข้อความอัตโนมัติทับสิ่งที่เราต้องสังเกตใน spike
 และกินโควตาข้อความตามข้อจำกัด C2 ที่ design ทั้งชุดวางอยู่บน
+
+> **Phase 1 (M4) ต้องกลับมาเปิด `Greeting messages` อีกครั้ง** พร้อมเขียนข้อความจริง
+> — ดูขั้นที่ 11 ท้ายไฟล์ · `Auto-reply messages` ปิดไว้ตลอดไป เพราะมันจะตอบทับ
+> reply ของเราเองทุกข้อความ
 
 ใน OA Manager → `Settings` → `Response settings`
 
@@ -234,3 +238,22 @@ Developers Console → channel เดิม → แท็บ `LIFF` → `Add`
 - [Get user IDs](https://developers.line.biz/en/docs/messaging-api/getting-user-ids/)
 - [Creating new LINE official accounts](https://help.line.me/official_account/web/categoryId/20010172/pc?lang=en&contentId=20013134)
 - [About Business ID](https://help2.line.me/business_id/web/pc?lang=en)
+
+---
+
+## ขั้นที่ 11 — เปิด greeting message กลับ (Phase 1 / M4)
+
+ตอนทำ spike เราปิดไว้ในขั้นที่ 4 เพราะมันตอบทับสิ่งที่ต้องสังเกต · พอถึง M4 บอทพูดเองได้
+แล้ว greeting กลายเป็นของที่ต้องมี: มันคือข้อความเดียวที่คนได้เห็นตอน**แอดบอทเป็นเพื่อน**
+ซึ่งเป็นจังหวะที่ยังไม่มี event ให้เราตอบ
+
+OA Manager → `Settings` → `Response settings` → `Greeting messages` → **เปิด**
+แล้วแก้ข้อความในเมนู `Greeting message`
+
+**greeting ฟรี ไม่กินโควตา 300 ข้อความ/เดือน** (C2) และไม่ต้องเขียนโค้ดสักบรรทัด
+
+ข้อความต้องพูดตรงกับไกด์ใน `lib/line/messages.ts` — ที่นั่นคือแหล่งเดียวของถ้อยคำฝั่งโค้ด
+ส่วน greeting ตั้งในคอนโซล แก้คนละที่กัน · **ห้ามโฆษณาคำสั่งที่ยังไม่เปิดใช้** ด้วยเกณฑ์
+เดียวกับไกด์ (D34) — M4 ยังจดบิลไม่ได้ greeting จึงต้องไม่สอนให้พิมพ์ `+ ข้าว 1200`
+
+`Auto-reply messages` **ยังต้องปิดอยู่** — มันตอบทับ reply ของเราทุกข้อความและกินโควตา

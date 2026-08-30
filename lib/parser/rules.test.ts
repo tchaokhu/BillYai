@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parseMessage } from './rules'
+import { parseAddressedMessage, parseMessage } from './rules'
 
 describe('Trigger filter — ข้อความที่ bot ไม่สนใจต้องคืน null', () => {
   it('ข้อความธรรมดาคืน null', () => {
@@ -387,5 +387,78 @@ describe('เคสรวมจากสเปก', () => {
         draft: { mode: 'share', surchargePct: 0 },
       })
     }
+  })
+})
+
+describe('คำสั่งที่มีอะไรต่อท้าย (D34)', () => {
+  it('`ยอด #tag` เป็นคำสั่งที่มี args ไม่ใช่ unparsed', () => {
+    expect(parseMessage('ยอด #เชียงใหม่')).toEqual({
+      kind: 'command',
+      command: 'balance',
+      args: '#เชียงใหม่',
+    })
+  })
+
+  it('หลาย tag ก็ยังเป็นคำสั่งที่มี args — ให้ชั้นถัดไปตัดสินว่ารองรับไหม', () => {
+    expect(parseMessage('ยอด #เชียงใหม่ #ส.ค.')).toEqual({
+      kind: 'command',
+      command: 'balance',
+      args: '#เชียงใหม่ #ส.ค.',
+    })
+  })
+
+  it('คำสั่งเปล่าไม่มี args', () => {
+    expect(parseMessage('ยอด')).toEqual({ kind: 'command', command: 'balance' })
+  })
+
+  it('คำสั่งตามด้วยคำธรรมดายังคืน null — กฎเงียบของกลุ่มสำคัญกว่า', () => {
+    // "ยอด" เป็นชื่อคนได้ และ "ยอด มาไหม" คือประโยคที่คุยกันเองในกลุ่ม
+    // ตอบว่า "ยังไม่เปิดใช้" ใส่บทสนทนาแบบนั้นคือสิ่งที่ทำให้โดนเตะออก
+    expect(parseMessage('ยอด มาไหม')).toBeNull()
+    expect(parseMessage('เลิก คุยเรื่องนี้กันเถอะ')).toBeNull()
+    expect(parseMessage('ยอด #')).toBeNull()
+  })
+})
+
+describe('parseAddressedMessage — ข้อความที่ mention บอทแล้วตัดชื่อออก', () => {
+  it('ว่างเปล่า = เรียกเฉยๆ ตอบไกด์', () => {
+    expect(parseAddressedMessage('')).toEqual({ kind: 'command', command: 'guide' })
+    expect(parseAddressedMessage('   ')).toEqual({ kind: 'command', command: 'guide' })
+  })
+
+  it('คำสั่งคำเดียวใช้ได้เหมือนเดิม', () => {
+    expect(parseAddressedMessage('ยอด')).toEqual({ kind: 'command', command: 'balance' })
+    expect(parseAddressedMessage('ยอด #เชียงใหม่')).toEqual({
+      kind: 'command',
+      command: 'balance',
+      args: '#เชียงใหม่',
+    })
+  })
+
+  it('จดบิลได้โดยไม่ต้องมี `+` เพราะ mention คือ Trigger ไปแล้ว', () => {
+    const result = parseAddressedMessage('ข้าว 1200 กอล์ฟ ตูน')
+    expect(result.kind).toBe('expense')
+    expect(result.kind === 'expense' && result.draft.totalSatang).toBe(120000)
+    expect(result.kind === 'expense' && result.draft.participants.map((p) => p.name)).toEqual([
+      'กอล์ฟ',
+      'ตูน',
+    ])
+  })
+
+  it('`+` นำหน้ายังใช้ได้ ไม่กลายเป็นคำอธิบายบิล', () => {
+    const result = parseAddressedMessage('+ ข้าว 1200')
+    expect(result.kind).toBe('expense')
+    expect(result.kind === 'expense' && result.draft.description).toBe('ข้าว')
+  })
+
+  it('ไม่มีทางคืน null — ถูกเรียกแล้วต้องมีคำตอบเสมอ', () => {
+    expect(parseAddressedMessage('มาไหม')).toEqual({ kind: 'unparsed', text: 'มาไหม' })
+    expect(parseAddressedMessage('ยอด มาไหม')).toEqual({ kind: 'unparsed', text: 'ยอด มาไหม' })
+    expect(parseAddressedMessage('1200')).toEqual({ kind: 'unparsed', text: '1200' })
+  })
+
+  it('ไม่แตะ parseMessage เดิม — ข้อความเดียวกันในกลุ่มยังเงียบ', () => {
+    expect(parseMessage('ข้าว 1200 กอล์ฟ')).toBeNull()
+    expect(parseMessage('')).toBeNull()
   })
 })
