@@ -11,7 +11,7 @@
  * ผู้เรียกเป็นคน log ผลลัพธ์ที่คืนไป ซึ่งเป็นค่าคงที่ ไม่มีข้อมูลใคร
  */
 
-import type { LineTextMessage } from './messages'
+import type { LineMessage } from './messages'
 
 const REPLY_ENDPOINT = 'https://api.line.me/v2/bot/message/reply'
 
@@ -22,7 +22,7 @@ const DEFAULT_TIMEOUT_MS = 3000
 
 export interface ReplyRequest {
   replyToken: string
-  messages: readonly LineTextMessage[]
+  messages: readonly LineMessage[]
   accessToken: string
 }
 

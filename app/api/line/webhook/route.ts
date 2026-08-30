@@ -12,6 +12,23 @@
 import { replyToLine } from '@/lib/line/client'
 import { readAccessToken, readChannelSecret } from '@/lib/line/env'
 import { handleLineWebhook } from '@/lib/line/webhook'
+import { createDraft } from '@/lib/repo/drafts'
+import { findActiveGroupByLineGroupId } from '@/lib/repo/groups'
+import { listMembers } from '@/lib/repo/members'
+
+/**
+ * ชื่อทุกคนที่วงรู้จัก ณ ตอนนี้ — **อ่านอย่างเดียว** (D28)
+ *
+ * ไม่มีวง = Roster ว่าง ซึ่งถูกต้องและเกิดบ่อยที่สุด: วงเกิดตอนกดยืนยันบิลใบแรก
+ * (D30) กลุ่มที่ยังไม่มีใครยืนยันอะไรเลยจึงยังไม่มีแถวใน `ledger_group`
+ */
+async function loadRoster(lineGroupId: string | null): Promise<readonly string[]> {
+  if (lineGroupId === null) return []
+  const group = await findActiveGroupByLineGroupId(lineGroupId)
+  if (group === null) return []
+  const members = await listMembers(group.id)
+  return members.map((member) => member.displayName)
+}
 
 /**
  * ยังเป็น node runtime — M5 เป็นต้นไปต่อ Postgres ด้วย `pg` ซึ่ง edge รันไม่ได้ (D24)
@@ -71,6 +88,17 @@ export async function POST(request: Request): Promise<Response> {
         canReply
           ? replyToLine({ replyToken, messages, accessToken }, { fetch })
           : { ok: false, reason: 'no-access-token' },
+      loadRoster,
+      /**
+       * ตอบกลับไม่ได้ก็อย่าเพิ่งเขียน — draft ที่ลงตารางแล้วแต่ไม่มีการ์ดให้กด
+       * คือแถวที่ไม่มีใครเข้าถึงได้จนกว่าจะหมดอายุ และ retry จะสร้างเพิ่มอีกใบ
+       * ทุกรอบ · โยนตรงนี้ทำให้ event นั้นนับเป็น `prepareFailed` แล้วได้ 500
+       * ซึ่งเป็นคำตอบที่ถูก: ยังไม่มีอะไรถูกเขียน การ retry หลังตั้ง env จึงกู้ได้
+       */
+      saveDraft: async (input) => {
+        if (!canReply) throw new Error('ไม่มี access token — ยังไม่เขียน draft')
+        return (await createDraft(input)).id
+      },
     },
   )
 
@@ -82,8 +110,9 @@ export async function POST(request: Request): Promise<Response> {
    * และถ้าพังต่อเนื่องจะปิด webhook endpoint ให้เอง = เปลี่ยนจาก "บอทตอบไม่ได้"
    * เป็น "บอทไม่ได้รับอะไรเลย" ซึ่งแย่กว่ากันมาก
    *
-   * ส่วนตอนที่มีคนพิมพ์คำสั่งจริง 500 ถูกแล้ว: ยังไม่มีอะไรถูกเขียนลง DB การ retry
-   * หลังตั้ง env จึงยังกู้ข้อความนั้นกลับมาได้ (D36)
+   * เส้นทางที่ต้องเขียน draft ถูกกันไว้ที่ `saveDraft` ข้างบนแล้ว — มันโยนก่อนแตะ
+   * DB ตอนตอบกลับไม่ได้ · ที่เหลือที่มาถึงบรรทัดนี้จึงเป็นคำตอบที่ไม่เขียนอะไรเลย
+   * (ไกด์ คำสั่งที่ยังไม่เปิด) ซึ่ง retry หลังตั้ง env กู้ได้ครบ (D36)
    */
   if (!canReply && result.replied > 0) {
     console.error('[webhook] LINE_CHANNEL_ACCESS_TOKEN ไม่ได้ตั้ง — มีของจะตอบแต่ตอบไม่ได้')
@@ -96,6 +125,7 @@ export async function POST(request: Request): Promise<Response> {
   console.warn(
     `[webhook] status=${result.status} total=${result.totalMs.toFixed(1)}ms ` +
       `replied=${result.replied} retryKey=${result.retryKey ?? '-'}` +
+      (result.prepareFailed > 0 ? ` prepareFailed=${result.prepareFailed}` : '') +
       (result.malformed ? ' malformed=true' : '') +
       (result.replyFailures.length > 0 ? ` replyFailed=${result.replyFailures.join(',')}` : ''),
   )

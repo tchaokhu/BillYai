@@ -1,20 +1,24 @@
 /**
  * ตัวจัดการ webhook ของ LINE ที่**ไม่รู้จัก Next.js** — รับสตริงกับฟังก์ชัน คืน object
  *
- * ขอบเขตรอบ M4: verify signature → อ่าน event → ตัดสินว่าจะตอบอะไร → ตอบกลับ
- * **ยังไม่แตะ DB เลยสักบรรทัด** การจดบิลเป็นของ M5/M6
+ * ขอบเขตรอบ M5: verify signature → อ่าน event → ตัดสินว่าจะตอบอะไร → อ่าน Roster
+ * → เขียน draft → ตอบการ์ดกลับ · **ปุ่มยืนยันยังไม่ทำงาน** นั่นคือ M6
  *
- * การยิง reply ฉีดเข้ามาเป็น dependency ไม่ import client ตรงๆ เพื่อให้เทสต์ยูนิต
- * รันได้โดยไม่ยิงเน็ตและไม่ต้องมี env จริง (กติกาเดิมตั้งแต่ M2)
+ * ทั้ง reply และงาน DB ฉีดเข้ามาเป็น dependency ไม่ import ของจริงตรงๆ เพื่อให้
+ * เทสต์ยูนิตรันได้โดยไม่ยิงเน็ต ไม่ต้องมี Docker และไม่ต้องมี env จริง
  */
 
 import type { ReplyOutcome } from './client'
 import { parseLineEvents, type LineEvent } from './events'
+import { draftCardMessage } from './flex'
 import { verifyLineSignature } from './signature'
 import { stripMentions } from './mention'
-import { renderReply, type LineTextMessage } from './messages'
+import { renderReply, type LineMessage } from './messages'
+import { buildDraft } from '../flow/draft'
 import { decideReply, type Surface } from '../flow/dispatch'
 import { parseAddressedMessage, parseMessage } from '../parser/rules'
+import { bangkokDate } from '../time'
+import type { ExpenseDraft } from '../types'
 
 export interface LineWebhookRequest {
   /** ไบต์ที่มาจริง ยังไม่ผ่าน JSON.parse — ลายเซ็นคิดจากตัวนี้ */
@@ -26,14 +30,27 @@ export interface LineWebhookRequest {
   retryKey?: string | null
 }
 
+export interface SaveDraftInput {
+  /** `null` = แชท 1:1 */
+  lineGroupId: string | null
+  lineUserId: string
+  draft: ExpenseDraft
+  /** `'YYYY-MM-DD'` เวลาไทย แช่ไว้ตั้งแต่ตอนนี้ (D35) */
+  spentAt: string
+}
+
 export interface LineWebhookDeps {
-  reply: (replyToken: string, messages: readonly LineTextMessage[]) => Promise<ReplyOutcome>
+  reply: (replyToken: string, messages: readonly LineMessage[]) => Promise<ReplyOutcome>
+  /** ชื่อ Member ทั้งหมดที่วงรู้จัก ณ ตอนนี้ — **อ่านอย่างเดียว** (D28) */
+  loadRoster: (lineGroupId: string | null) => Promise<readonly string[]>
+  /** คืน id ของ draft ที่เพิ่งเขียน — ใช้เป็น postback data */
+  saveDraft: (input: SaveDraftInput) => Promise<string>
   /** นาฬิกาหน่วย ms — แยกออกมาเพื่อให้เทสต์กำหนดค่าได้ */
   now?: () => number
 }
 
 export interface LineWebhookResult {
-  status: 200 | 401
+  status: 200 | 401 | 500
   totalMs: number
   /** body ผ่านลายเซ็นแต่ parse ไม่ออก */
   malformed: boolean
@@ -48,6 +65,13 @@ export interface LineWebhookResult {
    * (เราช้าไป) กับ `unauthorized` (access token ผิด) แก้คนละทางกันคนละเรื่อง
    */
   replyFailures: string[]
+  /**
+   * จำนวน event ที่เตรียมคำตอบไม่สำเร็จ (DB ล่ม) — ผู้เรียกเป็นคน log
+   *
+   * มากกว่าศูนย์เมื่อไหร่ status เป็น 500 เสมอ · แยกออกมาเพื่อให้ log บอกได้ว่า
+   * 500 มาจาก DB ไม่ใช่จากอย่างอื่น
+   */
+  prepareFailed: number
 }
 
 /** วงส่วนตัวใน 1:1 กับวงกลุ่ม เป็นคนละ surface แต่ใช้โค้ดร่วมกันทั้งหมด (D21) */
@@ -62,15 +86,37 @@ function surfaceOf(event: LineEvent): Surface {
  * `mentionsBot` ทำสองหน้าที่: เลือกทางเข้าของ parser และบอก `decideReply` ว่า
  * คนพูดกับเราอยู่ ซึ่งทำให้กฎเงียบไม่มีผลกับข้อความนั้น
  */
-function messagesFor(event: LineEvent): LineTextMessage[] {
+async function messagesFor(event: LineEvent, deps: LineWebhookDeps): Promise<LineMessage[]> {
   if (event.kind !== 'text') {
-    // postback มาจากการ์ดของเราเอง ซึ่งยังไม่มีในระบบจนถึง M6
+    // postback มาจากการ์ดของเราเอง — ปุ่มยืนยันเริ่มทำงานตอน M6
     return []
   }
 
   const { text, mentionsBot } = stripMentions(event.text, event.mentionees)
   const parsed = mentionsBot ? parseAddressedMessage(text) : parseMessage(text)
-  return renderReply(decideReply({ surface: surfaceOf(event), addressed: mentionsBot }, parsed))
+  const plan = decideReply({ surface: surfaceOf(event), addressed: mentionsBot }, parsed)
+  if (plan.kind !== 'draft') return renderReply(plan)
+
+  const lineGroupId = event.source.kind === 'group' ? event.source.lineGroupId : null
+  const lineUserId = event.source.lineUserId
+  if (lineUserId === null) {
+    // LINE ไม่ส่ง `userId` มาให้เมื่อคนพิมพ์ยังไม่ยอมรับข้อตกลงการใช้งานบัญชีทางการ
+    // · D26 ให้เฉพาะคนพิมพ์กดยืนยันได้ ซึ่งเช็คไม่ได้เลยถ้าไม่รู้ว่าใครพิมพ์
+    return renderReply({ kind: 'unknown-sender' })
+  }
+
+  // **อ่าน Roster ตอน draft ไม่เขียน** (D28) — ชื่อที่วงยังไม่รู้จักติดป้าย (ใหม่)
+  const roster = await deps.loadRoster(lineGroupId)
+  const outcome = buildDraft(plan.draft, roster)
+  if (outcome.kind === 'need-names') return renderReply({ kind: 'need-names' })
+
+  const draftId = await deps.saveDraft({
+    lineGroupId,
+    lineUserId,
+    draft: plan.draft,
+    spentAt: bangkokDate(event.timestamp),
+  })
+  return [draftCardMessage(outcome.card, draftId)]
 }
 
 export async function handleLineWebhook(
@@ -83,7 +129,12 @@ export async function handleLineWebhook(
 
   const done = (
     status: LineWebhookResult['status'],
-    extra: { malformed?: boolean; replied?: number; replyFailures?: string[] } = {},
+    extra: {
+      malformed?: boolean
+      replied?: number
+      replyFailures?: string[]
+      prepareFailed?: number
+    } = {},
   ): LineWebhookResult => ({
     status,
     totalMs: now() - startedAt,
@@ -91,6 +142,7 @@ export async function handleLineWebhook(
     retryKey,
     replied: extra.replied ?? 0,
     replyFailures: extra.replyFailures ?? [],
+    prepareFailed: extra.prepareFailed ?? 0,
   })
 
   // ด่านแรกเสมอ — ทุกบรรทัดหลังจากนี้ทำงานให้คนที่พิสูจน์ตัวแล้วเท่านั้น
@@ -110,14 +162,36 @@ export async function handleLineWebhook(
   }
 
   /**
+   * เตรียมคำตอบของทุก event ก่อน แล้วค่อยส่ง — แต่ **event ที่เตรียมสำเร็จต้องได้
+   * รับคำตอบเสมอ ต่อให้เพื่อนร่วมชุดจะพัง**
+   *
+   * `allSettled` ไม่ใช่ `all` เพราะการทิ้งทั้งชุดทำให้เกิดของที่แย่กว่าเดิม: บิลที่
+   * `saveDraft` สำเร็จไปแล้วจะมีแถวอยู่ใน DB โดยไม่มีการ์ดให้ใครกด แถวนั้นกู้ไม่ได้
+   * เลยจนกว่าจะหมดอายุ 24 ชั่วโมง · ส่วนราคาของการส่ง คือ retry จะทำให้การ์ดใบนั้น
+   * โผล่ซ้ำอีกครั้ง ซึ่ง ADR 0001 รับไว้แล้วว่าเป็นแค่ความรำคาญ
+   *
+   * ชุดที่มี event พังอย่างน้อยหนึ่งอันตอบ 500 เพื่อให้ LINE ส่งมาใหม่ — อันที่พัง
+   * ยังไม่มีอะไรถูกเขียน การ retry จึงยังกู้บิลที่คนพิมพ์กลับมาได้ (D36)
+   */
+  const settled = await Promise.allSettled(
+    parseLineEvents(payload).map(async (event) => ({
+      event,
+      messages: await messagesFor(event, deps),
+    })),
+  )
+  const prepared = settled.flatMap((result) =>
+    result.status === 'fulfilled' ? [result.value] : [],
+  )
+  const prepareFailed = settled.length - prepared.length
+
+  /**
    * ยิงขนาน ไม่ใช่ทีละอัน — แต่ละ event มี `replyToken` ของตัวเองและไม่มีลำดับ
    * ที่ต้องรักษา · ต่อคิวกันแปลว่า timeout หนึ่งครั้งกิน 3 วินาทีของทุก event
    * ที่รอข้างหลัง ชุดละ 5 event = 15 วินาที ซึ่งเลยเพดานเวลาของ function และ
    * นานพอที่ reply token ของอันหลังๆ จะหมดอายุก่อนถูกใช้
    */
   const sent = await Promise.all(
-    parseLineEvents(payload)
-      .map((event) => ({ event, messages: messagesFor(event) }))
+    prepared
       .filter(({ messages }) => messages.length > 0)
       .map(async ({ event, messages }) => {
         try {
@@ -133,8 +207,7 @@ export async function handleLineWebhook(
   const replied = sent.length
   const replyFailures = sent.filter((reason) => reason !== null)
 
-  // **200 เสมอเมื่อผ่านลายเซ็น** (D36) — รอบนี้ไม่มีการเขียนอะไรลง DB เลย
-  // จึงไม่มีความล้มเหลวแบบที่ retry แล้วผลจะต่าง · M5/M6 ที่เริ่มเขียนจริงต้อง
-  // กลับมาตอบ 500 เมื่อพังก่อนเขียน ตามเกณฑ์ "เขียนลงไปแล้วหรือยัง"
-  return done(200, { malformed, replied, replyFailures })
+  // reply ที่ยิงไม่ออกตอบ 200 ตามเกณฑ์ "เขียนลงไปแล้วหรือยัง" (D36) — retry ช่วย
+  // อะไรไม่ได้แล้วเมื่อ draft ลงตารางไปเรียบร้อย
+  return done(prepareFailed > 0 ? 500 : 200, { malformed, replied, replyFailures, prepareFailed })
 }

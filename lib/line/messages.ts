@@ -1,14 +1,14 @@
 /**
  * แปลง `ReplyPlan` เป็น message object ของ LINE — **ข้อความไทยทั้งระบบอยู่ไฟล์นี้**
  *
- * รอบ M4 เป็น text message ล้วน ยังไม่มี Flex · Flex ใบแรกคือ Draft card ของ M5
- *
  * **ไกด์ต้องไม่โฆษณาคำสั่งที่ยังไม่มี** — กติกานี้บังคับด้วยเทสต์ใน
  * `messages.test.ts` ที่ผูกข้อความไกด์เข้ากับ `IMPLEMENTED_COMMANDS` โดยตรง
  * เพิ่มคำสั่งเข้ารายการนั้นเมื่อไหร่ เทสต์จะแดงจนกว่าไกด์จะพูดถึงมัน
  */
 
-import type { ReplyPlan } from '../flow/dispatch'
+import { IMPLEMENTED_COMMANDS, type ReplyPlan } from '../flow/dispatch'
+import type { BotCommand } from '../types'
+import type { LineFlexMessage } from './flex'
 
 /** text message ของ LINE — ยาวได้ 5000 ตัวอักษร */
 export interface LineTextMessage {
@@ -16,33 +16,68 @@ export interface LineTextMessage {
   text: string
 }
 
+export type LineMessage = LineTextMessage | LineFlexMessage
+
 function text(value: string): LineTextMessage[] {
   return [{ type: 'text', text: value }]
 }
 
 /**
- * ไกด์ของ M4 — บอทยังทำอะไรไม่ได้เลยนอกจากแนะนำตัว
+ * ไวยากรณ์ของคำสั่งที่เปิดใช้แล้ว
  *
- * เขียนแบบนี้โดยตั้งใจ: สอนไวยากรณ์ที่ยังใช้ไม่ได้คือการหลอกให้คนพิมพ์แล้วโดน
- * ปฏิเสธ ซึ่งแย่กว่าบอกตรงๆ ว่ายังไม่พร้อม · พอ M6 กับ M7 ลงของจริง ไกด์นี้จะโต
- * ขึ้นพร้อมกับ `IMPLEMENTED_COMMANDS`
+ * `IMPLEMENTED_COMMANDS` เป็นแหล่งเดียวว่าอะไรเปิดแล้ว บรรทัดที่นี่เป็นแค่
+ * "ถ้าเปิดแล้วจะอธิบายว่ายังไง" · เทสต์บังคับให้สองอย่างนี้ตรงกันเสมอ
+ */
+const COMMAND_HELP: ReadonlyArray<{ command: BotCommand; line: string }> = [
+  { command: 'balance', line: 'ยอด — สรุปว่าใครติดใครเท่าไหร่' },
+  { command: 'nudge', line: 'ทวง — การ์ดทวงพร้อม QR ยอดเป๊ะ' },
+  { command: 'edit', line: 'แก้ — เปิดหน้าจัดการบิล' },
+  { command: 'undo', line: 'เลิก — ยกเลิกคำสั่งล่าสุดของตัวเอง' },
+]
+
+/**
+ * ไกด์ — สอนเฉพาะของที่ใช้ได้จริงในเฟสนี้
+ *
+ * สอนไวยากรณ์ที่ยังใช้ไม่ได้คือการหลอกให้คนพิมพ์แล้วโดนปฏิเสธ ซึ่งแย่กว่าบอกตรงๆ
+ * ว่ายังไม่พร้อม · ท่อนคำสั่งโตเองตาม `IMPLEMENTED_COMMANDS`
  */
 const GUIDE = [
   'บิลใหญ่ช่วยจดว่าใครจ่ายอะไรไปเท่าไหร่ แล้วคำนวณให้ว่าใครติดใครเท่าไหร่',
   '',
-  'ตอนนี้ยังสร้างไม่เสร็จ ยังจดบิลไม่ได้ — เรียกมาก็ได้แค่ทักทายกลับเท่านั้น',
+  'จดบิลด้วยการพิมพ์:',
+  '  + ข้าว 1200 กอล์ฟ ตูน',
+  '  + คอนโด 8000 กอล์ฟx2 เบียร์ ตูน',
+  '  + เหล้า 900 กอล์ฟ ตูน รวมฉัน',
+  '  + ข้าว 1200 #เชียงใหม่',
+  '',
+  'ยอดที่พิมพ์คือยอดสุดท้ายที่จ่ายจริง รวมค่าบริการและ VAT แล้ว',
+  ...COMMAND_HELP.filter((help) => IMPLEMENTED_COMMANDS.has(help.command)).map(
+    (help) => `  ${help.line}`,
+  ),
 ].join('\n')
 
-export function renderReply(plan: ReplyPlan): LineTextMessage[] {
+/**
+ * `draft` ไม่มีที่นี่โดยตั้งใจ — การ์ดต้องอ่าน Roster แล้วเขียนแถว draft ก่อน
+ * ซึ่งเป็น I/O ทั้งคู่ · ผู้เรียกทำสองอย่างนั้นแล้วค่อยเรียก `draftCardMessage`
+ */
+export function renderReply(plan: Exclude<ReplyPlan, { kind: 'draft' }>): LineTextMessage[] {
   switch (plan.kind) {
     case 'silent':
       // ไม่ส่งอะไรเลย — ต่างจากส่งข้อความว่าง ซึ่ง LINE จะปฏิเสธ
       return []
     case 'guide':
       return text(GUIDE)
+    case 'need-names':
+      // ไวยากรณ์แปลว่า "หารเท่าทุกคนใน Roster" — วงนี้ยังไม่รู้จักใครเลยสักคน
+      return text(
+        'ยังไม่รู้จักใครในวงนี้เลย พิมพ์ชื่อคนที่หารด้วยมาด้วย เช่น\n  + ข้าว 1200 กอล์ฟ ตูน',
+      )
+    case 'unknown-sender':
+      // ลองใหม่ไม่ช่วย — ต้องไปกดยอมรับข้อตกลงใน LINE ก่อน จึงต้องบอกให้ตรง
+      return text(
+        'จดให้ไม่ได้เพราะ LINE ไม่ได้บอกว่าใครเป็นคนพิมพ์ — ต้องยอมรับข้อตกลงการใช้งานบัญชีทางการก่อน แล้วพิมพ์ใหม่อีกครั้ง',
+      )
     case 'not-available':
-      return plan.what === 'expense'
-        ? text('ยังจดบิลไม่ได้ กำลังสร้างอยู่ อีกไม่นานจะพิมพ์ในกลุ่มได้เลย')
-        : text('คำสั่งนี้ยังไม่เปิดใช้')
+      return text('คำสั่งนี้ยังไม่เปิดใช้')
   }
 }

@@ -462,3 +462,23 @@ describe('parseAddressedMessage — ข้อความที่ mention บ�
     expect(parseMessage('')).toBeNull()
   })
 })
+
+describe('น้ำหนักที่ `distribute` คำนวณไม่ได้ ต้องตกตั้งแต่ parser', () => {
+  // ค่าที่ `String()` พิมพ์ออกมาเป็น exponential ทำให้ `weightDecimals` โยน error
+  // กลางเส้นทาง webhook → 500 → LINE retry ชุดเดิม → โยนซ้ำไม่รู้จบ
+  it.each([
+    'กอล์ฟx0.0000001',
+    'กอล์ฟx1000000000000000000000',
+    'กอล์ฟx0.0001',
+    'กอล์ฟx100000',
+  ])('%s → unparsed', (token) => {
+    expect(parseMessage(`+ ข้าว 1200 ${token} ตูน`)?.kind).toBe('unparsed')
+  })
+
+  it.each(['กอล์ฟx2', 'กอล์ฟx1.5', 'กอล์ฟx0.001', 'กอล์ฟx99999.999'])(
+    '%s ยังใช้ได้ตามปกติ',
+    (token) => {
+      expect(parseMessage(`+ ข้าว 1200 ${token} ตูน`)?.kind).toBe('expense')
+    },
+  )
+})
