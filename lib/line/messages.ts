@@ -58,10 +58,12 @@ const GUIDE = [
 ].join('\n')
 
 /**
- * `draft` ไม่มีที่นี่โดยตั้งใจ — การ์ดต้องอ่าน Roster แล้วเขียนแถว draft ก่อน
- * ซึ่งเป็น I/O ทั้งคู่ · ผู้เรียกทำสองอย่างนั้นแล้วค่อยเรียก `draftCardMessage`
+ * `draft` กับ `balance` ไม่มีที่นี่โดยตั้งใจ — ทั้งคู่ต้องอ่าน DB ก่อนถึงจะรู้ว่า
+ * การ์ดหน้าตายังไง · ผู้เรียกไป I/O เองแล้วค่อยเรียกตัวสร้างการ์ดของมัน
  */
-export function renderReply(plan: Exclude<ReplyPlan, { kind: 'draft' }>): LineTextMessage[] {
+export function renderReply(
+  plan: Exclude<ReplyPlan, { kind: 'draft' } | { kind: 'balance' }>,
+): LineTextMessage[] {
   switch (plan.kind) {
     case 'silent':
       // ไม่ส่งอะไรเลย — ต่างจากส่งข้อความว่าง ซึ่ง LINE จะปฏิเสธ
@@ -90,6 +92,10 @@ export function renderReply(plan: Exclude<ReplyPlan, { kind: 'draft' }>): LineTe
     case 'no-display-name':
       // ลองใหม่ไม่ช่วย — LINE ไม่ให้ชื่อมาจนกว่าเขาจะให้สิทธิ์
       return text('ยังดึงชื่อของคุณจาก LINE ไม่ได้ ลองเลือกชื่อที่มีอยู่แล้วในวงแทน')
+    case 'settled':
+      // ต่างจากวงที่ยังไม่เคยจดบิลซึ่งตอบไกด์ — คนนี้ใช้เป็นแล้ว ตอบไกด์ซ้ำคือ
+      // ไม่ตอบคำถามที่เขาถาม
+      return text('ตอนนี้ไม่มีใครติดใครแล้ว')
     case 'not-available':
       return text('คำสั่งนี้ยังไม่เปิดใช้')
   }

@@ -13,6 +13,8 @@
  */
 
 import { formatSatang } from '../money'
+import type { BalanceBlock } from '../flow/balance'
+import type { LineMessage } from './messages'
 import type { DraftCard } from '../flow/draft'
 
 type FlexText = {
@@ -50,6 +52,129 @@ type QuickReplyItem = {
   action: { type: 'postback'; label: string; data: string; displayText: string }
 }
 
+/**
+ * การ์ด `ยอด` — สรุปว่าใครติดใครทั้งวง (D31)
+ *
+ * **จัดกลุ่มตามเจ้าหนี้** เพราะคนที่พิมพ์ `ยอด` คือคนที่ควักเงินไปก่อน · หัวบล็อก
+ * มียอดรวมที่เขาได้คืน ซึ่งเป็นตัวเลขที่เขาอยากรู้ก่อนตัวเลขรายคน
+ *
+ * **ไม่ตัดใครทิ้ง** — Phase 1 ไม่มี LIFF ให้ไปดูส่วนที่ถูกตัด และ ledger ที่ซ่อนยอด
+ * โดยไม่มีทางเปิดดูรับไม่ได้ · วงใหญ่จนใส่ไม่ไหวไปโผล่เป็นข้อความแทน ดู
+ * `balanceCardMessage`
+ *
+ * **ไม่มี Passive Nag ต่อท้าย** (D32) — ทั้งใบเป็นยอดค้างอยู่แล้ว · โทน Escalation
+ * (D33) เป็นของ Phase 2 พร้อม Passive Nag
+ */
+function balanceBubble(blocks: readonly BalanceBlock[]): LineFlexMessage {
+  const total = blocks.reduce((sum, block) => sum + block.totalSatang, 0)
+
+  const contents: FlexComponent[] = [
+    {
+      type: 'box',
+      layout: 'horizontal',
+      contents: [
+        { type: 'text', text: 'ยอดค้าง', size: 'lg', weight: 'bold', flex: 3 },
+        { type: 'text', text: baht(total), size: 'lg', weight: 'bold', align: 'end', flex: 2 },
+      ],
+    },
+  ]
+
+  for (const block of blocks) {
+    contents.push({ type: 'separator', margin: 'md' })
+    contents.push({
+      type: 'box',
+      layout: 'vertical',
+      spacing: 'sm',
+      margin: 'md',
+      contents: [
+        {
+          type: 'box',
+          layout: 'horizontal',
+          contents: [
+            {
+              type: 'text',
+              text: `${shorten(block.creditorName, MAX_NAME)} ได้คืน`,
+              size: 'sm',
+              weight: 'bold',
+              wrap: true,
+              flex: 3,
+            },
+            {
+              type: 'text',
+              text: baht(block.totalSatang),
+              size: 'sm',
+              weight: 'bold',
+              align: 'end',
+              flex: 2,
+            },
+          ],
+        },
+        ...block.rows.map((row) =>
+          row2(shorten(row.debtorName, MAX_NAME), row.amountSatang),
+        ),
+      ],
+    })
+  }
+
+  return {
+    type: 'flex',
+    altText: `ยอดค้างทั้งวง ${baht(total)} · ${blocks.length} คนรอรับคืน`,
+    // การ์ดนี้อ่านอย่างเดียว ไม่มี footer
+    contents: {
+      type: 'bubble',
+      body: { type: 'box', layout: 'vertical', contents },
+    },
+  }
+}
+
+/**
+ * การ์ด `ยอด` — Flex ถ้าใส่ได้ ไม่งั้นเป็นข้อความที่มีเนื้อหาเท่ากันเป๊ะ
+ *
+ * **แถว Flex หนึ่งแถวหนักราว 250 ไบต์** เพราะเป็น box ที่มี text สองก้อน · วง 8 คน
+ * ที่ทุกคนเคยจ่ายมีได้ถึง 28 คู่ ซึ่งทะลุเพดาน 10 KB ของ bubble ไปแล้ว · ทะลุเมื่อไหร่
+ * LINE ปฏิเสธทั้งข้อความ แล้วคนพิมพ์ `ยอด` จะไม่เห็นอะไรเลย
+ *
+ * D31 ห้ามตัดคนออกเพราะ Phase 1 ไม่มีที่ให้ไปดูส่วนที่ถูกตัด — **ทางลงจึงเป็นการ
+ * ลดรูป ไม่ใช่ตัดเนื้อหา** · reply ส่งได้ 5 ก้อนต่อครั้ง ก้อนละ 5000 ตัวอักษร ซึ่ง
+ * รับได้ราว 800 แถว มากกว่าวงจริงทุกขนาด
+ */
+export function balanceCardMessage(blocks: readonly BalanceBlock[]): LineMessage[] {
+  const bubble = balanceBubble(blocks)
+  if (Buffer.byteLength(JSON.stringify(bubble), 'utf8') <= MAX_BUBBLE_BYTES) return [bubble]
+
+  const total = blocks.reduce((sum, block) => sum + block.totalSatang, 0)
+  const chunks: string[] = []
+  let current = `ยอดค้างทั้งวง ${baht(total)}`
+
+  const push = (line: string): void => {
+    // +1 สำหรับตัวขึ้นบรรทัดที่จะต่อเข้าไป
+    if (current.length + line.length + 1 > MAX_TEXT) {
+      chunks.push(current)
+      current = line
+    } else {
+      current = current + LF + line
+    }
+  }
+
+  for (const block of blocks) {
+    push('')
+    push(`${shorten(block.creditorName, MAX_NAME)} ได้คืน ${baht(block.totalSatang)}`)
+    for (const row of block.rows) {
+      push(`  ${shorten(row.debtorName, MAX_NAME)} ${baht(row.amountSatang)}`)
+    }
+  }
+  chunks.push(current)
+
+  // เกินห้าก้อนแปลว่าวงใหญ่กว่าที่ระบบนี้ออกแบบมารับไหว — **บอกตรงๆ ว่าตัด**
+  // ไม่ใช่เงียบๆ ตัดทิ้ง ซึ่งใน ledger คือยอดหาย
+  if (chunks.length > MAX_MESSAGES) {
+    const kept = chunks.slice(0, MAX_MESSAGES - 1)
+    kept.push(`ยังมีต่ออีก ${chunks.length - kept.length} ส่วนที่ยาวเกินกว่าจะส่งในครั้งเดียว`)
+    return kept.map((text) => ({ type: 'text', text }))
+  }
+  return chunks.map((text) => ({ type: 'text', text }))
+}
+
 export interface LineFlexMessage {
   type: 'flex'
   /** ข้อความที่ขึ้นใน notification และในไคลเอนต์ที่แสดง Flex ไม่ได้ */
@@ -57,7 +182,11 @@ export interface LineFlexMessage {
   contents: {
     type: 'bubble'
     body: FlexBox
-    footer: FlexBox
+    /**
+     * ไม่ใส่เลยเมื่อไม่มีปุ่ม — **box ที่ `contents` ว่างถูก LINE ปฏิเสธทั้งข้อความ**
+     * ซึ่งจะทำให้คนพิมพ์ `ยอด` ไม่เห็นอะไรเลย
+     */
+    footer?: FlexBox
   }
   quickReply?: { items: QuickReplyItem[] }
 }
@@ -88,6 +217,37 @@ function shorten(value: string, max: number): string {
 /** `฿1,200` — `formatSatang` ตัด `.00` ทิ้งให้แล้วเมื่อไม่มีเศษสตางค์ */
 function baht(satang: number): string {
   return `฿${formatSatang(satang)}`
+}
+
+/** ชื่อยาวเกินจอถูกตัด — การ์ดนี้ไม่มีปุ่ม ตัวเลขจึงสำคัญกว่าชื่อเต็ม */
+const MAX_NAME = 24
+
+/**
+ * เพดาน JSON ของ bubble หนึ่งใบตามเอกสาร LINE คือ 10 KB — เผื่อไว้หน่อย
+ *
+ * ทะลุเมื่อไหร่ LINE ปฏิเสธทั้งข้อความ แล้วคนพิมพ์ `ยอด` จะไม่เห็นอะไรเลย ซึ่ง
+ * **แย่กว่าการ์ดที่หน้าตาไม่สวย** · D31 ห้ามตัดคนออกเพราะ Phase 1 ไม่มีที่ให้ไปดู
+ * ส่วนที่ถูกตัด — ทางลงจึงเป็นการเปลี่ยนรูปแบบ ไม่ใช่ตัดเนื้อหา
+ */
+const MAX_BUBBLE_BYTES = 9_000
+
+/** เพดานของ text message และจำนวนก้อนต่อ reply ตามเอกสาร LINE */
+const MAX_TEXT = 5_000
+const MAX_MESSAGES = 5
+
+/** ตัวขึ้นบรรทัด — แยกออกมาเพื่อไม่ให้ต้องมี template literal คร่อมสองบรรทัด */
+const LF = String.fromCharCode(10)
+
+/** แถวลูกหนี้ในการ์ด `ยอด` — เยื้องเข้าไปให้เห็นว่าอยู่ใต้เจ้าหนี้คนไหน */
+function row2(name: string, amountSatang: number): FlexBox {
+  return {
+    type: 'box',
+    layout: 'horizontal',
+    contents: [
+      { type: 'text', text: `  ${name}`, size: 'sm', color: '#555555', wrap: true, flex: 3 },
+      { type: 'text', text: baht(amountSatang), size: 'sm', align: 'end', flex: 2 },
+    ],
+  }
 }
 
 function row(name: string, amountSatang: number): FlexBox {

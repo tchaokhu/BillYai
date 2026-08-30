@@ -51,7 +51,17 @@ function fakeDb(roster: readonly string[] = [], payerName: string | null = null)
     return { kind: 'committed', description: 'ข้าว', totalSatang: 120000 }
   })
   const fetchDisplayName = vi.fn<LineWebhookDeps['fetchDisplayName']>(async () => 'ชื่อจาก LINE')
-  return { saved, viewed, confirmed, loadGroupView, saveDraft, confirmDraft, fetchDisplayName }
+  const loadBalance = vi.fn<LineWebhookDeps['loadBalance']>(async () => 'no-bills')
+  return {
+    saved,
+    viewed,
+    confirmed,
+    loadGroupView,
+    saveDraft,
+    confirmDraft,
+    fetchDisplayName,
+    loadBalance,
+  }
 }
 
 /** นาฬิกาปลอมที่เดินทีละ 1 ms ทุกครั้งที่ถูกอ่าน — ทำให้ค่าเวลาคาดเดาได้ */
@@ -102,6 +112,7 @@ async function run(events: unknown[], outcome?: ReplyOutcome, roster: readonly s
       saveDraft: db.saveDraft,
       confirmDraft: db.confirmDraft,
       fetchDisplayName: db.fetchDisplayName,
+      loadBalance: db.loadBalance,
       now: fakeClock(),
     },
   )
@@ -161,7 +172,7 @@ describe('handleLineWebhook — กฎเงียบของกลุ่ม', 
 
 describe('handleLineWebhook — ตอบเมื่อถูกเรียก', () => {
   it('คำสั่งที่ยังไม่เปิดใช้ได้คำตอบ ไม่ใช่ความเงียบ', async () => {
-    const { calls } = await run([groupText('ยอด')])
+    const { calls } = await run([groupText('ทวง')])
     expect(calls).toHaveLength(1)
     expect(calls[0]?.replyToken).toBe('token-1')
     expect(firstText(calls[0]?.messages ?? [])).toContain('ยังไม่เปิดใช้')
@@ -426,6 +437,7 @@ describe('handleLineWebhook — DB ล่มตอนยังไม่ได้
         saveDraft: async () => 'ไม่ควรถูกเรียก',
         confirmDraft: async () => ({ kind: 'gone' as const }),
         fetchDisplayName: async () => null,
+        loadBalance: async () => 'no-bills' as const,
         now: fakeClock(),
       },
     )
@@ -446,6 +458,7 @@ describe('handleLineWebhook — DB ล่มตอนยังไม่ได้
         },
         confirmDraft: async () => ({ kind: 'gone' as const }),
         fetchDisplayName: async () => null,
+        loadBalance: async () => 'no-bills' as const,
         now: fakeClock(),
       },
     )
@@ -468,6 +481,7 @@ describe('handleLineWebhook — DB ล่มตอนยังไม่ได้
         saveDraft: async () => 'ไม่ควรถูกเรียก',
         confirmDraft: async () => ({ kind: 'gone' as const }),
         fetchDisplayName: async () => null,
+        loadBalance: async () => 'no-bills' as const,
         now: fakeClock(),
       },
     )
@@ -491,6 +505,7 @@ describe('handleLineWebhook — DB ล่มตอนยังไม่ได้
         saveDraft: async () => 'ไม่ควรถูกเรียก',
         confirmDraft: async () => ({ kind: 'gone' as const }),
         fetchDisplayName: async () => null,
+        loadBalance: async () => 'no-bills' as const,
         now: fakeClock(),
       },
     )
@@ -620,5 +635,65 @@ describe('handleLineWebhook — กดยืนยัน (M6)', () => {
       { reply: fake.reply, ...db, now: fakeClock() },
     )
     expect(JSON.stringify(fake.calls[0]?.messages)).not.toContain('ฉันเป็นคนใหม่')
+  })
+})
+
+describe('handleLineWebhook — `ยอด` (M7)', () => {
+  it('วงที่ยังไม่เคยจดบิลตอบไกด์ ไม่ใช่ตอบว่ายอดเป็นศูนย์', async () => {
+    const { calls, loadBalance } = await run([groupText('ยอด')])
+    expect(loadBalance).toHaveBeenCalledWith(GROUP_ID, USER_ID)
+    expect(firstText(calls[0]?.messages ?? [])).toContain('บิลใหญ่ช่วยจด')
+  })
+
+  it('เคลียร์กันหมดแล้วบอกตรงๆ — ไม่ใช่ตอบไกด์ซ้ำ', async () => {
+    const body = JSON.stringify({ events: [groupText('ยอด')] })
+    const fake = fakeReply()
+    const db = fakeDb()
+    db.loadBalance.mockResolvedValue({ kind: 'settled' })
+    await handleLineWebhook(
+      { rawBody: body, signature: sign(body), channelSecret: SECRET },
+      { reply: fake.reply, ...db, now: fakeClock() },
+    )
+    expect(firstText(fake.calls[0]?.messages ?? [])).toContain('ไม่มีใครติดใคร')
+  })
+
+  it('มีหนี้แล้วได้การ์ดจัดกลุ่มตามเจ้าหนี้', async () => {
+    const body = JSON.stringify({ events: [groupText('ยอด')] })
+    const fake = fakeReply()
+    const db = fakeDb()
+    db.loadBalance.mockResolvedValue({
+      kind: 'debts',
+      blocks: [
+        {
+          creditorName: 'กอล์ฟ',
+          totalSatang: 90000,
+          rows: [
+            { debtorName: 'ตูน', amountSatang: 60000 },
+            { debtorName: 'เบียร์', amountSatang: 30000 },
+          ],
+        },
+      ],
+    })
+    await handleLineWebhook(
+      { rawBody: body, signature: sign(body), channelSecret: SECRET },
+      { reply: fake.reply, ...db, now: fakeClock() },
+    )
+    const message = fake.calls[0]?.messages[0]
+    expect(message?.type).toBe('flex')
+    const json = JSON.stringify(message)
+    expect(json).toContain('กอล์ฟ ได้คืน')
+    expect(json).toContain('฿600')
+    expect(json).toContain('฿300')
+  })
+
+  it('`ยอด` ใน 1:1 อ่านวงส่วนตัว', async () => {
+    const { loadBalance } = await run([directText('ยอด')])
+    expect(loadBalance).toHaveBeenCalledWith(null, USER_ID)
+  })
+
+  it('`ยอด #tag` ยังไม่เปิดใช้ ไม่แตะ ledger เลย (D34)', async () => {
+    const { calls, loadBalance } = await run([groupText('ยอด #เชียงใหม่')])
+    expect(loadBalance).not.toHaveBeenCalled()
+    expect(firstText(calls[0]?.messages ?? [])).toContain('ยังไม่เปิดใช้')
   })
 })

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { draftCardMessage } from './flex'
+import { balanceCardMessage, draftCardMessage } from './flex'
 import type { DraftCard } from '../flow/draft'
 
 const CARD: DraftCard = {
@@ -220,5 +220,90 @@ describe('draftCardMessage — แถวเลือกตัวตน (D29 / AD
       'ตูน',
       'ฉันเป็นคนใหม่',
     ])
+  })
+})
+
+describe('balanceCardMessage — การ์ด `ยอด` (D31)', () => {
+  const BLOCKS = [
+    {
+      creditorName: 'กอล์ฟ',
+      totalSatang: 90000,
+      rows: [
+        { debtorName: 'ตูน', amountSatang: 60000 },
+        { debtorName: 'เบียร์', amountSatang: 30000 },
+      ],
+    },
+    {
+      creditorName: 'แนน',
+      totalSatang: 20000,
+      rows: [{ debtorName: 'ตูน', amountSatang: 20000 }],
+    },
+  ]
+
+  it('หัวบล็อกบอกยอดรวมที่เจ้าหนี้ได้คืน', () => {
+    const texts = allText(balanceCardMessage(BLOCKS))
+    expect(texts).toContain('กอล์ฟ ได้คืน')
+    expect(texts).toContain('฿900')
+  })
+
+  it('ยอดรวมทั้งวงอยู่หัวการ์ดและใน altText', () => {
+    const [message] = balanceCardMessage(BLOCKS)
+    if (message?.type !== 'flex') throw new Error('วงเล็กต้องได้ Flex')
+    expect(allText(message.contents.body)).toContain('฿1,100')
+    expect(message.altText).toContain('฿1,100')
+    expect(message.altText.length).toBeLessThanOrEqual(400)
+  })
+
+  it('ลูกหนี้ทุกคนโผล่ครบ', () => {
+    const texts = allText(balanceCardMessage(BLOCKS)).join('|')
+    expect(texts).toContain('ตูน')
+    expect(texts).toContain('เบียร์')
+    expect(texts).toContain('แนน')
+  })
+
+  it('**ไม่มีปุ่ม** — การ์ดนี้อ่านอย่างเดียว', () => {
+    expect(findPostbackData(balanceCardMessage(BLOCKS))).toBeNull()
+  })
+
+  it('วงเล็กได้ Flex ก้อนเดียว', () => {
+    expect(balanceCardMessage(BLOCKS)).toHaveLength(1)
+  })
+
+  it('วงแปดคนที่ทุกคนเคยจ่าย (28 คู่) ยังเป็น Flex และไม่ชนเพดาน 10 KB', () => {
+    // 28 คือจำนวนคู่สูงสุดของวง 8 คน — หนี้เก็บทิศทางเดียวต่อคู่ (D5)
+    const realistic = Array.from({ length: 7 }, (_, i) => ({
+      creditorName: `เจ้าหนี้คนที่ ${i}`,
+      totalSatang: 10000 * (7 - i),
+      rows: Array.from({ length: 7 - i }, (_, j) => ({
+        debtorName: `ลูกหนี้คนที่ ${j} ชื่อยาวพอควร`,
+        amountSatang: 10000,
+      })),
+    }))
+    const messages = balanceCardMessage(realistic)
+    expect(messages).toHaveLength(1)
+    expect(Buffer.byteLength(JSON.stringify(messages), 'utf8')).toBeLessThan(10_000)
+  })
+
+  it('วงที่ใหญ่จน Flex ใส่ไม่ไหว ลดรูปเป็น text — **ไม่ตัดใครทิ้ง** (D31)', () => {
+    // ทะลุเพดานแล้ว LINE ปฏิเสธทั้งข้อความ = คนพิมพ์ `ยอด` ไม่เห็นอะไรเลย
+    const huge = Array.from({ length: 20 }, (_, i) => ({
+      creditorName: `เจ้าหนี้คนที่ ${i}`,
+      totalSatang: 100000,
+      rows: Array.from({ length: 10 }, (_, j) => ({
+        debtorName: `ลูกหนี้คนที่ ${j} ชื่อยาวพอสมควรจริงๆ`,
+        amountSatang: 10000,
+      })),
+    }))
+    const messages = balanceCardMessage(huge)
+    expect(messages.every((m) => m.type === 'text')).toBe(true)
+    // reply ส่งได้ 5 ก้อน ก้อนละ 5000 ตัวอักษร
+    expect(messages.length).toBeLessThanOrEqual(5)
+    for (const message of messages) {
+      if (message.type !== 'text') throw new Error('ต้องเป็น text')
+      expect(message.text.length).toBeLessThanOrEqual(5000)
+    }
+    // ทุกเจ้าหนี้ยังอยู่ครบ ไม่มีใครถูกตัดทิ้งเงียบๆ
+    const joined = messages.map((m) => (m.type === 'text' ? m.text : '')).join('')
+    expect(joined.split('ได้คืน')).toHaveLength(21)
   })
 })
