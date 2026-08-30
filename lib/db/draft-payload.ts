@@ -11,7 +11,7 @@
  */
 
 import { isSupportedWeight } from '@/lib/money'
-import type { DraftParticipant, ExpenseDraft, SplitMode } from '@/lib/types'
+import type { DraftLine, DraftParticipant, ExpenseDraft, SplitMode } from '@/lib/types'
 
 const SPLIT_MODES: ReadonlySet<SplitMode> = new Set<SplitMode>([
   'equal',
@@ -50,6 +50,53 @@ function participantsOf(value: unknown): DraftParticipant[] | null {
     participants.push({ name, weight })
   }
   return participants
+}
+
+/**
+ * สิ่งที่เก็บจริงในคอลัมน์ `payload`
+ *
+ * มีสองส่วนเพราะแยกคนละหน้าที่: `draft` คือสิ่งที่ parser อ่านได้จากข้อความ ส่วน
+ * `lines` คือ**ผลหารที่คำนวณเสร็จแล้ว** ซึ่งเป็นตัวเลขชุดเดียวกับที่คนเห็นบนการ์ด
+ *
+ * เก็บ `lines` ไว้ด้วยเพราะ Roster โตได้ระหว่างที่การ์ดค้างอยู่ในแชทได้ถึง 24 ชั่วโมง
+ * ถ้าตอนกดยืนยันคำนวณใหม่จาก Roster ณ ตอนนั้น คนจะกดจากตัวเลขหนึ่งแล้วได้อีกตัวเลข
+ * ลง ledger — ซึ่งเป็นความผิดพลาดประเภทที่ ledger รับไม่ได้
+ */
+export interface StoredDraft {
+  draft: ExpenseDraft
+  lines: DraftLine[]
+}
+
+function linesOf(value: unknown): DraftLine[] | null {
+  if (!Array.isArray(value) || value.length === 0) return null
+
+  const lines: DraftLine[] = []
+  let payers = 0
+  for (const entry of value) {
+    const record = asRecord(entry)
+    if (record === null) return null
+    const name = nonBlankString(record.name)
+    if (name === null) return null
+    const { amountSatang, isNew, isPayer } = record
+    if (typeof amountSatang !== 'number' || !Number.isSafeInteger(amountSatang)) return null
+    if (amountSatang < 0) return null
+    if (typeof isNew !== 'boolean' || typeof isPayer !== 'boolean') return null
+    if (isPayer) payers++
+    lines.push({ name, amountSatang, isNew, isPayer })
+  }
+  // บิลหนึ่งใบมีคนจ่ายคนเดียว (`CONTEXT.md` หัวข้อ Payer) — สองแถวแปลว่า payload เพี้ยน
+  if (payers > 1) return null
+  return lines
+}
+
+export function parseStoredDraft(value: unknown): StoredDraft | null {
+  const payload = asRecord(value)
+  if (payload === null) return null
+  const draft = parseDraftPayload(payload.draft)
+  if (draft === null) return null
+  const lines = linesOf(payload.lines)
+  if (lines === null) return null
+  return { draft, lines }
 }
 
 export function parseDraftPayload(value: unknown): ExpenseDraft | null {

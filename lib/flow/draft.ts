@@ -11,7 +11,7 @@
  */
 
 import { splitExpense } from '../split'
-import type { ExpenseDraft, Participant } from '../types'
+import type { DraftLine, ExpenseDraft, Participant } from '../types'
 
 /**
  * ชื่อที่ใช้แทนคนพิมพ์บนการ์ด — ตอน draft เรายังไม่รู้ว่าเขาคือ Member ตัวไหน
@@ -28,12 +28,7 @@ export const PAYER_LABEL = 'คุณ'
  */
 const PAYER_KEY = ' payer'
 
-export interface DraftLine {
-  name: string
-  amountSatang: number
-  /** ชื่อนี้วงยังไม่รู้จัก — ป้าย `(ใหม่)` บนการ์ด (D28) */
-  isNew: boolean
-}
+export type { DraftLine }
 
 export interface DraftCard {
   description: string
@@ -63,6 +58,9 @@ export function buildDraft(
   payerName: string | null,
 ): DraftOutcome {
   const known = new Set(roster.map((name) => name.trim()))
+  // เทียบแบบ trim ทั้งสองฝั่งเสมอ — ชื่อในตารางถูก trim ตอนเขียนแล้ว แต่แถวเก่าที่
+  // เขียนไว้ก่อนกฎนั้นยังมีได้ และการพลาดตรงนี้แปลว่าคนจ่ายหายจากบิลแบบเงียบ
+  const payer = payerName === null ? null : payerName.trim()
 
   // ชื่อที่พิมพ์มาอาจมีช่องว่างติดมา — เทียบกับ Roster หลัง trim ทั้งสองฝั่ง
   const named = draft.participants.map((p) => ({ ...p, name: p.name.trim() }))
@@ -85,11 +83,11 @@ export function buildDraft(
     if (known.size === 0) return { kind: 'need-names' }
     for (const name of known) {
       participants.push({ memberId: name, weight: 1 })
-      lines.push({ key: name, name, isNew: false })
+      lines.push({ key: name, name, isNew: false, isPayer: name === payer })
     }
-    if (payerName === null) {
+    if (payer === null) {
       participants.push({ memberId: PAYER_KEY, weight: 1 })
-      lines.push({ key: PAYER_KEY, name: PAYER_LABEL, isNew: false })
+      lines.push({ key: PAYER_KEY, name: PAYER_LABEL, isNew: false, isPayer: true })
     }
   } else {
     for (const participant of named) {
@@ -98,13 +96,14 @@ export function buildDraft(
         key: participant.name,
         name: participant.name,
         isNew: !known.has(participant.name),
+        isPayer: false,
       })
     }
     if (draft.includesPayer) {
       participants.push({ memberId: PAYER_KEY, weight: 1 })
       // ไม่ติดป้าย `(ใหม่)` ให้คนพิมพ์ — ป้ายนั้นมีไว้เตือนว่า "พิมพ์ชื่อผิดหรือเปล่า"
       // ซึ่งไม่ใช่คำถามที่ตอบได้ตอนยังไม่รู้ว่าเขาคือใครในวง
-      lines.push({ key: PAYER_KEY, name: payerName ?? PAYER_LABEL, isNew: false })
+      lines.push({ key: PAYER_KEY, name: payer ?? PAYER_LABEL, isNew: false, isPayer: true })
     }
   }
 
@@ -121,6 +120,7 @@ export function buildDraft(
     name: line.name,
     amountSatang: amountOf.get(line.key) ?? 0,
     isNew: line.isNew,
+    isPayer: line.isPayer,
   }))
 
   const card: DraftCard = {

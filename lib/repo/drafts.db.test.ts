@@ -13,7 +13,7 @@ import { randomUUID } from 'node:crypto'
 import { afterAll, describe, expect, it } from 'vitest'
 import { closePool, getPool, withTransaction } from '@/lib/db/client'
 import { createDraft, deleteDraft, findDraft, sweepExpiredDrafts } from './drafts'
-import type { ExpenseDraft } from '@/lib/types'
+import type { DraftLine, ExpenseDraft } from '@/lib/types'
 
 afterAll(async () => {
   await closePool()
@@ -27,6 +27,9 @@ const DRAFT: ExpenseDraft = {
   includesPayer: false,
   surchargePct: 0,
 }
+
+/** ผลหารที่คำนวณเสร็จแล้ว — เก็บคู่กับ draft เพื่อให้ยอดบนการ์ดกับ ledger ตรงกัน */
+const LINES: DraftLine[] = [{ name: 'กอล์ฟ', amountSatang: 120000, isNew: true, isPayer: false }]
 
 /** id ปลอมที่ไม่มีวันชนของจริง — repo เป็น public ห้ามมี id จริง */
 function fakeLineGroupId(): string {
@@ -42,6 +45,7 @@ function input(overrides: Partial<Parameters<typeof createDraft>[0]> = {}) {
     lineGroupId: fakeLineGroupId(),
     lineUserId: fakeLineUserId(),
     draft: DRAFT,
+    lines: LINES,
     spentAt: '2026-08-30',
     ...overrides,
   }
@@ -73,6 +77,7 @@ describe('createDraft', () => {
     expect(found?.lineUserId).toBe(created.lineUserId)
     expect(found?.spentAt).toBe('2026-08-30')
     expect(found?.draft).toEqual(DRAFT)
+    expect(found?.lines).toEqual(LINES)
   })
 
   it('draft ของแชท 1:1 ไม่มี `lineGroupId`', async () => {
@@ -203,9 +208,17 @@ describe('deleteDraft — กดยืนยันได้ครั้งเด
   })
 
   it('ลบของหมดอายุได้ — คนกดการ์ดเก่าต้องไม่ทิ้งแถวค้างไว้', async () => {
+    // ไม่ assert ค่าที่ `deleteDraft` คืน เพราะการกวาดของหมดอายุทำทั้งตาราง ไฟล์อื่น
+    // ที่รันขนานกันอาจกวาดแถวนี้ไปก่อนแล้ว · สิ่งที่ต้องจริงคือ "แถวไม่เหลือ"
     const old = await createDraft(input())
     await ageDraft(old.id, 30)
-    expect(await deleteDraft(old.id)).toBe(true)
+    await deleteDraft(old.id)
+
+    const { rows } = await getPool().query<{ n: number }>(
+      `select count(*)::int as n from expense_draft where id = $1`,
+      [old.id],
+    )
+    expect(rows[0]?.n).toBe(0)
   })
 })
 

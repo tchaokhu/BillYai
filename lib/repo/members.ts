@@ -62,12 +62,6 @@ export async function findMemberByName(
 }
 
 /**
- * หา Member ของคนคนหนึ่งในวงหนึ่ง — `unique (group_id, app_user_id)` การันตีว่ามีได้แถวเดียว
- *
- * รวมคนที่ออกจากกลุ่มไปแล้วเช่นกัน: เขากลับมาพิมพ์ในกลุ่มเมื่อไหร่ต้องเจอตัวเดิม
- * พร้อมหนี้เดิม ไม่ใช่ถูกสร้างใหม่เป็นคนที่สอง
- */
-/**
  * คนพิมพ์คือ Member ตัวไหนในวงนี้ — join ผ่าน `app_user.line_user_id`
  *
  * `null` แปลว่า **เขายังไม่เคยยืนยันตัวตนในวงนี้** ซึ่งเป็นสัญญาณที่ D29 ใช้ตัดสิน
@@ -92,6 +86,12 @@ export async function findMemberByLineUserId(
   return firstOrNull(rows)
 }
 
+/**
+ * หา Member ของคนคนหนึ่งในวงหนึ่ง — `unique (group_id, app_user_id)` การันตีว่ามีได้แถวเดียว
+ *
+ * รวมคนที่ออกจากกลุ่มไปแล้วเช่นกัน: เขากลับมาพิมพ์ในกลุ่มเมื่อไหร่ต้องเจอตัวเดิม
+ * พร้อมหนี้เดิม ไม่ใช่ถูกสร้างใหม่เป็นคนที่สอง
+ */
 export async function findMemberByAppUser(
   groupId: string,
   appUserId: string,
@@ -154,10 +154,20 @@ export async function findMemberByLinkTokenHash(
  * การเริ่ม trim ตอนนี้จะทำให้ชื่อที่มีอยู่แล้วชนกันเงียบๆ — เป็นการย้าย Roster
  * ที่ต้องมี migration ไม่ใช่ผลข้างเคียงของการกันชื่อว่าง
  */
-function assertDisplayName(displayName: string): void {
-  if (displayName.trim() === '') {
+/**
+ * ชื่อที่เก็บจริงต้องไม่มีช่องว่างหัวท้าย — **trim ที่นี่ที่เดียว**
+ *
+ * ชื่อจาก LINE (`displayName`) มีช่องว่างติดมาได้ และเก็บดิบๆ แล้วจะพังเงียบ:
+ * ชั้นที่เทียบชื่อกับ Roster เทียบแบบ trim แล้ว ชื่อ `" Golf "` ในตารางจึงไม่มีวัน
+ * ตรงกับ `"Golf"` ที่ส่งมาเทียบ · ผลคือคนจ่ายหายจากบิล แล้วรอบถัดไป `ensureMembers`
+ * สร้างแถวที่สองให้คนเดิม ซึ่งลบไม่ได้ตลอดกาล (D18) และหนี้ของเขาแตกเป็นสองก้อน
+ */
+function cleanDisplayName(displayName: string): string {
+  const trimmed = displayName.trim()
+  if (trimmed === '') {
     throw new Error('ชื่อสมาชิกว่างไม่ได้')
   }
+  return trimmed
 }
 
 /**
@@ -177,17 +187,17 @@ export async function ensureMember(
   displayName: string,
   db?: Queryable,
 ): Promise<Member> {
-  assertDisplayName(displayName)
+  const name = cleanDisplayName(displayName)
   const { rows } = await q(db).query<MemberRow>(
     `insert into member (group_id, display_name)
      values ($1, $2)
      on conflict (group_id, display_name)
        do update set display_name = excluded.display_name
      returning ${COLUMNS}`,
-    [groupId, displayName],
+    [groupId, name],
   )
   const row = rows[0]
-  if (!row) throw new Error(`members: ensureMember ไม่คืนแถวสำหรับ "${displayName}"`)
+  if (!row) throw new Error(`members: ensureMember ไม่คืนแถวสำหรับ "${name}"`)
   return toMember(row)
 }
 
@@ -206,13 +216,13 @@ export async function ensureMembers(
 ): Promise<Member[]> {
   if (displayNames.length === 0) return []
   // ตรวจให้ครบทั้งชุดก่อนยิง — ชื่อเสียตัวเดียวต้องไม่ทิ้งคนอื่นที่สร้างไปแล้วไว้
-  for (const name of displayNames) assertDisplayName(name)
+  const cleaned = displayNames.map(cleanDisplayName)
 
   // เรียงก่อนยิงเพื่อกัน deadlock: `on conflict do update` ล็อกแถวที่ชนตามลำดับ
   // ใน array — สองสายที่ส่งชื่อชุดเดียวกันมาคนละลำดับจะล็อกไขว้กันแล้วโดน 40P01
   // ทิ้งไปหนึ่งสาย. เรียงด้วย code unit ไม่ใช่ `localeCompare` เพราะสิ่งที่ต้องการ
   // คือทุกสายเรียงเหมือนกันเป๊ะ ไม่ใช่เรียงถูกตามภาษา
-  const unique = [...new Set(displayNames)].sort()
+  const unique = [...new Set(cleaned)].sort()
   const { rows } = await q(db).query<MemberRow>(
     `insert into member (group_id, display_name)
      select $1, name from unnest($2::text[]) as name
@@ -222,8 +232,10 @@ export async function ensureMembers(
     [groupId, unique],
   )
 
+  // map กลับด้วยชื่อที่ trim แล้ว ไม่ใช่ชื่อดิบที่ผู้เรียกส่งมา — แถวในตารางถูกเก็บ
+  // ด้วยชื่อที่ trim แล้วเสมอ
   const byName = new Map(rows.map((row) => [row.display_name, toMember(row)]))
-  return displayNames.map((name) => {
+  return cleaned.map((name) => {
     const member = byName.get(name)
     if (!member) throw new Error(`members: ensureMembers ไม่คืนแถวสำหรับ "${name}"`)
     return member
