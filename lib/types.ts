@@ -120,7 +120,7 @@ export interface DraftLine {
  * `guide` ไม่ใช่คำที่ผู้ใช้พิมพ์ — เกิดจากการ @mention บอทเปล่าๆ ซึ่งเจตนาชัดว่า
  * เรียกบอท และเป็นที่เดียวที่คนใหม่ในกลุ่มจะได้เห็นไวยากรณ์โดยไม่มีใครสอน (D19)
  */
-export type BotCommand = 'balance' | 'nudge' | 'edit' | 'undo' | 'guide'
+export type BotCommand = 'balance' | 'bills' | 'nudge' | 'edit' | 'undo' | 'guide'
 
 /**
  * `null` = ข้อความไม่เข้า Trigger — bot ไม่สนใจ ไม่เก็บ ไม่ส่ง LLM

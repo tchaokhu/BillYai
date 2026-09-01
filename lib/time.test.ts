@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { bangkokDate } from './time'
+import { bangkokDate, thaiShortDate } from './time'
 
 /**
  * เส้นทางตรวจอิสระ — บวก offset คงที่แล้วตัดสตริง ISO
@@ -81,5 +81,41 @@ describe('bangkokDate — ขอบวันอยู่ที่ 17:00Z', () =>
     expect(() => bangkokDate(-8_640_000_000_000_001)).toThrow(/epoch ms/)
     // ขอบบนพอดีต้องไม่พัง (ปีของมันคือ 275760 จึงไม่ใช่สี่หลัก)
     expect(() => bangkokDate(8_640_000_000_000_000)).not.toThrow()
+  })
+})
+
+describe('thaiShortDate — วันที่บนการ์ด', () => {
+  it('แปลง `YYYY-MM-DD` เป็นวันที่ไทยแบบสั้น พร้อมปี พ.ศ. สองหลัก', () => {
+    expect(thaiShortDate('2026-09-01')).toBe('1 ก.ย. 69')
+    expect(thaiShortDate('2026-01-31')).toBe('31 ม.ค. 69')
+    expect(thaiShortDate('2025-12-05')).toBe('5 ธ.ค. 68')
+  })
+
+  it('ครบทั้งสิบสองเดือน', () => {
+    const months = [
+      'ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.',
+      'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.',
+    ]
+    months.forEach((name, i) => {
+      const mm = String(i + 1).padStart(2, '0')
+      expect(thaiShortDate(`2026-${mm}-15`)).toBe(`15 ${name} 69`)
+    })
+  })
+
+  it('ตัดศูนย์นำหน้าวันออก — `01` อ่านว่า 1 ไม่ใช่ 01', () => {
+    expect(thaiShortDate('2026-09-07')).toBe('7 ก.ย. 69')
+  })
+
+  it('ไม่แปลงผ่าน `Date` — สตริงนี้เป็นวันที่ไทยอยู่แล้ว ห้ามถูก timezone ขยับ', () => {
+    // `new Date('2026-09-01')` อ่านเป็น UTC เที่ยงคืน ซึ่งในโซนที่ช้ากว่าจะกลาย
+    // เป็นวันก่อนหน้า · บั๊กแบบนั้นทำให้บิลย้ายวันเงียบๆ ตอน deploy ข้ามภูมิภาค
+    expect(thaiShortDate('2026-01-01')).toBe('1 ม.ค. 69')
+    expect(thaiShortDate('2026-12-31')).toBe('31 ธ.ค. 69')
+  })
+
+  it('รูปแบบที่ไม่ใช่ `YYYY-MM-DD` ต้องโยน ไม่ใช่คืนขยะ', () => {
+    expect(() => thaiShortDate('01/09/2026')).toThrow()
+    expect(() => thaiShortDate('2026-13-01')).toThrow()
+    expect(() => thaiShortDate('')).toThrow()
   })
 })

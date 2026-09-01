@@ -16,6 +16,7 @@ import { formatSatang } from '../money'
 import type { BalanceBlock } from '../flow/balance'
 import type { LineMessage } from './messages'
 import type { DraftCard } from '../flow/draft'
+import type { BillRow } from '../flow/bills'
 
 type FlexText = {
   type: 'text'
@@ -26,6 +27,14 @@ type FlexText = {
   align?: 'end'
   flex?: number
   wrap?: boolean
+  margin?: 'sm' | 'md' | 'lg'
+}
+
+type FlexPostbackAction = {
+  type: 'postback'
+  label: string
+  data: string
+  displayText?: string
 }
 
 type FlexBox = {
@@ -34,6 +43,8 @@ type FlexBox = {
   contents: FlexComponent[]
   spacing?: 'sm' | 'md'
   margin?: 'sm' | 'md' | 'lg'
+  /** ทั้งกล่องกดได้ — ใช้กับแถวในรายการ `บิล` ซึ่งเป็นทางเดียวไปหารายละเอียด */
+  action?: FlexPostbackAction
 }
 
 type FlexSeparator = { type: 'separator'; margin?: 'sm' | 'md' | 'lg' }
@@ -42,7 +53,7 @@ type FlexButton = {
   type: 'button'
   style: 'primary'
   height: 'sm'
-  action: { type: 'postback'; label: string; data: string; displayText?: string }
+  action: FlexPostbackAction
 }
 
 type FlexComponent = FlexText | FlexBox | FlexSeparator | FlexButton
@@ -408,4 +419,179 @@ export function draftCardMessage(
       footer,
     },
   }
+}
+
+/**
+ * การ์ด `บิล` — รายการบิลที่กดดูรายละเอียดรายใบได้ (D45)
+ *
+ * **แถวมีแค่ชื่อ วันที่ ยอด ไม่มีรายชื่อคน** — นี่คือทั้งหมดของ D45 · แถวที่กาง
+ * รายคนจะหนักตามขนาดวง วง 4 คนแค่ 8 ใบก็ทะลุเพดาน bubble ส่วนแถวแบบนี้หนักคงที่
+ * ราว 250 ไบต์ ใส่ได้ราว 35 ใบไม่ว่าวงจะใหญ่แค่ไหน · รายละเอียดไปอยู่หลังการกด
+ *
+ * **การ์ดนี้ไม่พูดว่าใครยังค้างในใบไหน** — `settlement` ไม่ได้ชี้ `expense` คำว่า
+ * "บิลใบนี้ยังไม่ถูกจ่าย" ไม่มีอยู่ในระบบ (D33) · การ์ดที่อ้างแบบนั้นคือตัวเลขผิด
+ * ใน ledger ซึ่งแย่กว่าดูยาก · อยากรู้ว่าใครติดใครให้พิมพ์ `ยอด`
+ */
+function billListBubble(rows: readonly BillRow[], omitted: number): LineFlexMessage {
+  const contents: FlexComponent[] = [
+    {
+      type: 'box',
+      layout: 'horizontal',
+      contents: [
+        { type: 'text', text: 'บิลที่จดไว้', size: 'lg', weight: 'bold', flex: 3 },
+        {
+          type: 'text',
+          text: `${rows.length + omitted} ใบ`,
+          size: 'lg',
+          weight: 'bold',
+          align: 'end',
+          flex: 2,
+        },
+      ],
+    },
+    { type: 'separator', margin: 'md' },
+  ]
+
+  for (const bill of rows) {
+    contents.push({
+      type: 'box',
+      layout: 'horizontal',
+      margin: 'md',
+      // **`expense.id` เท่านั้น ห้ามพาชื่อ** — ชื่อไทยผ่าน `encodeURIComponent`
+      // ยาวขึ้นเก้าเท่าแล้วทะลุเพดาน 300 ตัวอักษรตั้งแต่ชื่อยาวราว 27 ตัว (ADR 0002)
+      action: {
+        type: 'postback',
+        label: shorten(bill.description, MAX_LABEL),
+        data: `bill=${bill.id}`,
+        displayText: bill.description,
+      },
+      contents: [
+        { type: 'text', text: shorten(bill.description, MAX_NAME), size: 'sm', flex: 4 },
+        { type: 'text', text: bill.date, size: 'sm', color: '#555555', flex: 3 },
+        // `›` อยู่ในก้อนเดียวกับยอด — คนต้องเห็นว่าแถวกดได้ แต่ component ที่เพิ่ม
+        // มาอีกก้อนคือน้ำหนักที่คูณด้วยจำนวนบิลทุกใบ
+        { type: 'text', text: `${baht(bill.totalSatang)}  ›`, size: 'sm', align: 'end', flex: 4 },
+      ],
+    })
+  }
+
+  // ตัดได้ แต่ต้องบอกว่าตัดไปเท่าไหร่ (D31/D44) · Phase 2 เปลี่ยนบรรทัดนี้เป็นปุ่ม
+  // เปิด LIFF ตาม D46 ซึ่งเป็นเงื่อนไขที่ D31 ระบุไว้เองว่าทำให้การตัดยอมรับได้
+  if (omitted > 0) {
+    contents.push({ type: 'separator', margin: 'md' })
+    contents.push({
+      type: 'text',
+      text: `ยังมีอีก ${omitted} ใบที่ไม่ได้แสดง`,
+      size: 'sm',
+      color: '#555555',
+      margin: 'md',
+      wrap: true,
+    })
+  }
+
+  return {
+    type: 'flex',
+    altText: `บิลที่จดไว้ ${rows.length + omitted} ใบ`,
+    contents: {
+      type: 'bubble',
+      body: { type: 'box', layout: 'vertical', contents },
+    },
+  }
+}
+
+/**
+ * การ์ด `บิล` — Flex ถ้าใส่ได้ ไม่งั้นเป็นข้อความที่มีเนื้อหาเท่ากัน
+ *
+ * ทางลงเดียวกับ `balanceCardMessage` · **ราคาที่ต่างคือแถวที่ลดรูปแล้วกดไม่ได้**
+ * จึงต้องบอกวิธีไปต่อ ไม่ใช่ปล่อยให้เขาเดาว่าทำไมกดไม่ติด
+ */
+export function billListCardMessage(view: {
+  kind: 'bills'
+  rows: readonly BillRow[]
+  omitted: number
+}): LineMessage[] {
+  const bubble = billListBubble(view.rows, view.omitted)
+  if (Buffer.byteLength(JSON.stringify(bubble), 'utf8') <= MAX_BUBBLE_BYTES) return [bubble]
+
+  const chunks: string[] = []
+  let current = `บิลที่จดไว้ ${view.rows.length + view.omitted} ใบ`
+
+  const push = (line: string): void => {
+    if (current.length + line.length + 1 > MAX_TEXT) {
+      chunks.push(current)
+      current = line
+    } else {
+      current = current + LF + line
+    }
+  }
+
+  push('')
+  for (const bill of view.rows) {
+    push(`${shorten(bill.description, MAX_NAME)} · ${bill.date} · ${baht(bill.totalSatang)}`)
+  }
+  if (view.omitted > 0) {
+    push('')
+    push(`ยังมีอีก ${view.omitted} ใบที่ไม่ได้แสดง`)
+  }
+  chunks.push(current)
+
+  if (chunks.length > MAX_MESSAGES) {
+    const kept = chunks.slice(0, MAX_MESSAGES - 1)
+    kept.push(`ยังมีต่ออีก ${chunks.length - kept.length} ส่วนที่ยาวเกินกว่าจะส่งในครั้งเดียว`)
+    return kept.map((text) => ({ type: 'text', text }))
+  }
+  return chunks.map((text) => ({ type: 'text', text }))
+}
+
+/**
+ * การ์ดรายละเอียดของบิลใบเดียว — โครงเดียวกับการ์ด Draft **แต่ไม่มีปุ่ม**
+ *
+ * บิลลง ledger ไปแล้ว ไม่มีอะไรให้กดยืนยันอีก · ปุ่มที่กดแล้วไม่เกิดอะไรคือของที่
+ * คนจะกดแล้วสงสัยว่าบอทพัง
+ *
+ * **โชว์วันที่** ต่างจากการ์ด Draft ที่จงใจไม่โชว์ — ที่นั่นคนเพิ่งพิมพ์ไปเมื่อกี้
+ * ส่วนที่นี่คือของเก่าที่ถูกเปิดขึ้นมาดู วันที่คือครึ่งหนึ่งของคำตอบ
+ */
+export function billDetailCardMessage(detail: {
+  description: string
+  date: string
+  totalSatang: number
+  lines: readonly { name: string; amountSatang: number; isPayer: boolean }[]
+}): LineMessage[] {
+  const contents: FlexComponent[] = [
+    { type: 'text', text: shorten(detail.description, MAX_DESCRIPTION), size: 'lg', weight: 'bold', wrap: true },
+    { type: 'text', text: detail.date, size: 'sm', color: '#555555' },
+    {
+      type: 'box',
+      layout: 'horizontal',
+      margin: 'md',
+      contents: [
+        { type: 'text', text: 'ยอดรวม', size: 'md', weight: 'bold', flex: 3 },
+        { type: 'text', text: baht(detail.totalSatang), size: 'md', weight: 'bold', align: 'end', flex: 2 },
+      ],
+    },
+    { type: 'separator', margin: 'md' },
+    {
+      type: 'box',
+      layout: 'vertical',
+      spacing: 'sm',
+      margin: 'md',
+      // ป้ายคนจ่ายอยู่ในชื่อ ไม่ใช่คอลัมน์แยก — ยอดรายคนอ่านไม่รู้เรื่องถ้าไม่รู้
+      // ว่าใครออกเงินไปก่อน และคอลัมน์ที่ว่างเกือบทุกแถวคือน้ำหนักที่ไม่ได้ใช้
+      contents: detail.lines.map((line) =>
+        row(`${shorten(line.name, MAX_NAME)}${line.isPayer ? ' (จ่าย)' : ''}`, line.amountSatang),
+      ),
+    },
+  ]
+
+  return [
+    {
+      type: 'flex',
+      altText: `${shorten(detail.description, MAX_NAME)} · ${detail.date} · ${baht(detail.totalSatang)}`,
+      contents: {
+        type: 'bubble',
+        body: { type: 'box', layout: 'vertical', contents },
+      },
+    },
+  ]
 }

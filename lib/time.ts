@@ -58,3 +58,52 @@ export function bangkokDate(epochMs: number): string {
   // ไม่ต้อง pad เอง: `2-digit` เติมศูนย์ให้แล้ว และปีของระบบนี้เป็นสี่หลักเสมอ
   return `${year}-${month}-${day}`
 }
+
+/** ชื่อย่อเดือนไทย เรียงตามเลขเดือน 1–12 */
+const THAI_MONTHS = [
+  'ม.ค.',
+  'ก.พ.',
+  'มี.ค.',
+  'เม.ย.',
+  'พ.ค.',
+  'มิ.ย.',
+  'ก.ค.',
+  'ส.ค.',
+  'ก.ย.',
+  'ต.ค.',
+  'พ.ย.',
+  'ธ.ค.',
+] as const
+
+const ISO_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/
+
+/** ปีพุทธศักราชมากกว่าคริสต์ศักราช 543 ปี */
+const BE_OFFSET = 543
+
+/**
+ * `'2026-09-01'` → `'1 ก.ย. 69'` — วันที่บนการ์ดที่คนไทยอ่านออกทันที
+ *
+ * **แปลงจากสตริงตรงๆ ไม่ผ่าน `Date`** — ค่าที่รับมาคือ `spent_at` ซึ่งเป็นวันที่
+ * ตามเวลาไทยอยู่แล้ว ส่วน `new Date('2026-09-01')` อ่านเป็นเที่ยงคืน **UTC** แล้ว
+ * ทุกการอ่านค่าถัดจากนั้นจะเลื่อนไปตามโซนของเครื่องที่รัน · บั๊กชนิดนั้นทำให้บิล
+ * ย้ายวันเงียบๆ และจะโผล่เฉพาะตอน deploy ข้ามภูมิภาคเท่านั้น
+ *
+ * **มีปี พ.ศ. สองหลักเสมอ** — รายการบิลย้อนหลังข้ามปีได้ และวันที่ที่กำกวมใน
+ * ledger คือวันที่ผิด · ตัดสินใจแบบนี้แทนการเทียบกับ "ปีนี้" เพราะการเทียบนั้น
+ * ต้องรู้เวลาปัจจุบัน ซึ่งจะทำให้ฟังก์ชันนี้ไม่บริสุทธิ์และเทสต์ไม่ได้แบบตรงไปตรงมา
+ */
+export function thaiShortDate(isoDate: string): string {
+  const match = ISO_DATE_RE.exec(isoDate)
+  if (match === null) {
+    throw new Error(`วันที่ต้องเป็น 'YYYY-MM-DD' — ได้ ${JSON.stringify(isoDate)}`)
+  }
+
+  const [, year, month, day] = match as unknown as [string, string, string, string]
+  const monthIndex = Number(month) - 1
+  const name = THAI_MONTHS[monthIndex]
+  // เลขเดือนนอกช่วง 1–12 ผ่าน regex มาได้ แต่ไม่มีเดือนให้ตั้งชื่อ
+  if (name === undefined) throw new Error(`เดือนไม่มีอยู่จริง: ${isoDate}`)
+
+  const be = String(Number(year) + BE_OFFSET).slice(-2)
+  return `${Number(day)} ${name} ${be}`
+}

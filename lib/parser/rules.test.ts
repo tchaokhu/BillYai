@@ -482,3 +482,31 @@ describe('น้ำหนักที่ `distribute` คำนวณไม่�
     },
   )
 })
+
+describe('คำสั่ง `บิล` (D45)', () => {
+  it('`บิล` คำเดียวเป็นคำสั่ง', () => {
+    expect(parseMessage('บิล')).toEqual({ kind: 'command', command: 'bills' })
+  })
+
+  it('`บิล #tag` อ่าน args ออก — ชั้นนี้ไม่ตัดสินว่ารองรับไหม (D34)', () => {
+    expect(parseMessage('บิล #เชียงใหม่')).toEqual({
+      kind: 'command',
+      command: 'bills',
+      args: '#เชียงใหม่',
+    })
+  })
+
+  it('`บิลเท่าไหร่` ไม่ใช่คำสั่ง — คำสั่งต้องตรงทั้ง token', () => {
+    // ติดกันเป็น token เดียว ไม่ตรงกับคีย์เวิร์ด · ถ้าปล่อยผ่าน บอทจะโผล่กลาง
+    // บทสนทนาทุกครั้งที่มีใครถามราคาอาหาร
+    expect(parseMessage('บิลเท่าไหร่')).toBeNull()
+  })
+
+  it('`บิล มายัง` ไม่ใช่คำสั่ง — ส่วนต่อท้ายต้องเป็น #tag ล้วน', () => {
+    expect(parseMessage('บิล มายัง')).toBeNull()
+  })
+
+  it('เรียกบอทแล้วพิมพ์ `บิล` ก็เป็นคำสั่งเดียวกัน', () => {
+    expect(parseAddressedMessage('บิล')).toEqual({ kind: 'command', command: 'bills' })
+  })
+})
