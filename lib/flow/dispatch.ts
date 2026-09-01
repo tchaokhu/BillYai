@@ -50,6 +50,17 @@ export type ReplyPlan =
   | { kind: 'balance' }
   /** มีบิลแล้วแต่ไม่มีใครติดใคร — คนละเรื่องกับวงที่ยังไม่เคยจดบิล */
   | { kind: 'settled' }
+  /** ต้องอ่านรายการบิลก่อนถึงจะตอบได้ — ผู้เรียกเป็นคนไป I/O ต่อ (D45) */
+  | { kind: 'bills' }
+  /**
+   * กดแถวของบิลที่ไม่มีในวงนี้ — **ไม่บอกว่ามันมีอยู่จริงที่อื่น**
+   *
+   * การ์ด `บิล` ลอยอยู่ในแชทได้ตลอดกาล และ id ที่ส่งกลับมาไม่มีอะไรรับประกันว่า
+   * เป็นของวงนี้ · ตอบเหมือนกันทั้งกรณีไม่มีจริงและกรณีอยู่คนละวง
+   */
+  | { kind: 'bill-not-found' }
+  /** บิลถูกยกเลิกไปแล้ว — ต่างจากหาไม่เจอ และต่างจากการโชว์ยอดเก่าซึ่งผิด */
+  | { kind: 'bill-voided' }
 
 /**
  * คำสั่งที่ลงของจริงแล้ว — M4 มีแค่ไกด์
@@ -60,6 +71,7 @@ export type ReplyPlan =
 export const IMPLEMENTED_COMMANDS: ReadonlySet<BotCommand> = new Set<BotCommand>([
   'guide',
   'balance',
+  'bills',
 ])
 
 export function decideReply(context: ReplyContext, parsed: ParseResult | null): ReplyPlan {
@@ -105,6 +117,9 @@ export function decideReply(context: ReplyContext, parsed: ParseResult | null): 
 
   // `ยอด` ต้องอ่าน ledger ซึ่งเป็น I/O — ไฟล์นี้ตัดสินอย่างเดียว ไม่ไปหยิบข้อมูลเอง
   if (parsed.command === 'balance') return { kind: 'balance' }
+
+  // `บิล` เหมือนกัน — รายการบิลอยู่ใน DB ไม่ใช่ในเจตนา
+  if (parsed.command === 'bills') return { kind: 'bills' }
 
   return { kind: 'guide' }
 }

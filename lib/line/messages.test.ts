@@ -45,9 +45,10 @@ describe('renderReply — เจตนาเดียวได้ข้อคว
 })
 
 describe('ไกด์ต้องไม่โฆษณาคำสั่งที่ยังไม่มี', () => {
-  const ALL: readonly BotCommand[] = ['balance', 'nudge', 'edit', 'undo']
+  const ALL: readonly BotCommand[] = ['balance', 'bills', 'nudge', 'edit', 'undo']
   const KEYWORDS: Readonly<Record<string, string>> = {
     balance: 'ยอด',
+    bills: 'บิล',
     nudge: 'ทวง',
     edit: 'แก้',
     undo: 'เลิก',
@@ -104,5 +105,27 @@ describe('ไกด์ — D47: สอนไวยากรณ์ของที
       expect(guide).toContain('  + ข้าว 1200 กอล์ฟ ตูน')
       expect(guide).not.toContain('@บิลใหญ่ +')
     }
+  })
+})
+
+describe('renderReply — บิลที่กดแล้วเปิดไม่ได้', () => {
+  it('บิลที่ถูกยกเลิกกับบิลที่หาไม่เจอ พูดคนละอย่าง', () => {
+    // การ์ดเก่าลอยอยู่ในแชทตลอดกาล (D30 ไม่มี hard delete) — กดแล้วเงียบอ่านออกว่า
+    // บอทพัง ส่วนโชว์ยอดของบิลที่ยกเลิกไปแล้วคือตัวเลขผิดใน ledger
+    const voided = renderReply({ kind: 'bill-voided' }, 'group')
+    const missing = renderReply({ kind: 'bill-not-found' }, 'group')
+    expect(voided[0]?.text).not.toBe(missing[0]?.text)
+    expect(voided).toHaveLength(1)
+    expect(missing).toHaveLength(1)
+  })
+
+  it('บิลที่ยกเลิกบอกว่ายกเลิก ไม่ใช่บอกว่าหาไม่เจอ', () => {
+    expect(renderReply({ kind: 'bill-voided' }, 'group')[0]?.text).toContain('ยกเลิก')
+  })
+
+  it('บิลคนละวงตอบว่าหาไม่เจอ — ไม่บอกว่ามีอยู่จริงที่อื่น', () => {
+    const text = renderReply({ kind: 'bill-not-found' }, 'group')[0]?.text ?? ''
+    expect(text).toContain('ไม่เจอ')
+    expect(text).not.toContain('วงอื่น')
   })
 })
