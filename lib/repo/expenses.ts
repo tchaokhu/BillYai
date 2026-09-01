@@ -507,6 +507,25 @@ export async function findExpenseById(
  * — ถ้าไม่ผูกลำดับไว้ Postgres จะคืนมาสลับที่ได้ตามใจ plan แล้วหน้าจอจะขยับเอง
  * ระหว่าง refresh โดยไม่มีอะไรเปลี่ยน
  */
+/**
+ * นับบิลที่ยังไม่ถูกยกเลิกในวง — **นับ ไม่ดึงแถว**
+ *
+ * รายการ `บิล` ตัดที่ 20 ใบแต่ต้องบอกได้ว่าทั้งหมดมีกี่ใบ (D45) · ดึงทุกแถวมานับ
+ * เองแปลว่าวงที่มีบิลเป็นพันจะขนข้อมูลข้ามเน็ตมาทิ้งทุกครั้งที่มีคนพิมพ์คำสั่ง
+ */
+export async function countExpenses(
+  groupId: string,
+  db: Queryable = getPool(),
+): Promise<number> {
+  const { rows } = await db.query<{ count: string }>(
+    `select count(*)::text as count from expense where group_id = $1 and status = 'active'`,
+    [groupId],
+  )
+  // `count(*)` ของ Postgres เป็น bigint ซึ่ง `pg` คืนมาเป็นสตริงเพื่อไม่ให้เสียความ
+  // แม่นยำ — แปลงเองที่นี่ ไม่ใช่ปล่อยให้กลายเป็น NaN ที่ปลายทาง
+  return Number(rows[0]?.count ?? '0')
+}
+
 export async function listExpenses(
   groupId: string,
   options: ListExpensesOptions = {},

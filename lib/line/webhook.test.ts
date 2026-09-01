@@ -52,15 +52,25 @@ function fakeDb(roster: readonly string[] = [], payerName: string | null = null)
   })
   const fetchDisplayName = vi.fn<LineWebhookDeps['fetchDisplayName']>(async () => 'ชื่อจาก LINE')
   const loadBalance = vi.fn<LineWebhookDeps['loadBalance']>(async () => 'no-bills')
+  const loadBillList = vi.fn<LineWebhookDeps['loadBillList']>(async () => 'no-bills')
+  /** ทุกคำขอรายละเอียด — ใช้ตรวจว่าวงกับคนกดถูกส่งไปให้ repo จริง */
+  const detailAsked: Array<Parameters<LineWebhookDeps['loadBillDetail']>[0]> = []
+  const loadBillDetail = vi.fn<LineWebhookDeps['loadBillDetail']>(async (input) => {
+    detailAsked.push(input)
+    return 'not-found'
+  })
   return {
     saved,
     viewed,
     confirmed,
+    detailAsked,
     loadGroupView,
     saveDraft,
     confirmDraft,
     fetchDisplayName,
     loadBalance,
+    loadBillList,
+    loadBillDetail,
   }
 }
 
@@ -121,7 +131,13 @@ function postback(data: string, replyToken = 'token-1'): unknown {
   }
 }
 
-async function run(events: unknown[], outcome?: ReplyOutcome, roster: readonly string[] = []) {
+async function run(
+  events: unknown[],
+  outcome?: ReplyOutcome,
+  roster: readonly string[] = [],
+  /** ทับ dependency ทีละตัวสำหรับเคสที่ของปลอมมาตรฐานตอบไม่ตรง */
+  overrides: Partial<LineWebhookDeps> = {},
+) {
   const body = JSON.stringify({ events })
   const fake = fakeReply(outcome)
   const db = fakeDb(roster)
@@ -134,7 +150,10 @@ async function run(events: unknown[], outcome?: ReplyOutcome, roster: readonly s
       confirmDraft: db.confirmDraft,
       fetchDisplayName: db.fetchDisplayName,
       loadBalance: db.loadBalance,
+      loadBillList: db.loadBillList,
+      loadBillDetail: db.loadBillDetail,
       now: fakeClock(),
+      ...overrides,
     },
   )
   return { result, ...fake, ...db }
@@ -459,6 +478,8 @@ describe('handleLineWebhook — DB ล่มตอนยังไม่ได้
         confirmDraft: async () => ({ kind: 'gone' as const }),
         fetchDisplayName: async () => null,
         loadBalance: async () => 'no-bills' as const,
+      loadBillList: async () => 'no-bills' as const,
+      loadBillDetail: async () => 'not-found' as const,
         now: fakeClock(),
       },
     )
@@ -480,6 +501,8 @@ describe('handleLineWebhook — DB ล่มตอนยังไม่ได้
         confirmDraft: async () => ({ kind: 'gone' as const }),
         fetchDisplayName: async () => null,
         loadBalance: async () => 'no-bills' as const,
+      loadBillList: async () => 'no-bills' as const,
+      loadBillDetail: async () => 'not-found' as const,
         now: fakeClock(),
       },
     )
@@ -503,6 +526,8 @@ describe('handleLineWebhook — DB ล่มตอนยังไม่ได้
         confirmDraft: async () => ({ kind: 'gone' as const }),
         fetchDisplayName: async () => null,
         loadBalance: async () => 'no-bills' as const,
+      loadBillList: async () => 'no-bills' as const,
+      loadBillDetail: async () => 'not-found' as const,
         now: fakeClock(),
       },
     )
@@ -527,6 +552,8 @@ describe('handleLineWebhook — DB ล่มตอนยังไม่ได้
         confirmDraft: async () => ({ kind: 'gone' as const }),
         fetchDisplayName: async () => null,
         loadBalance: async () => 'no-bills' as const,
+      loadBillList: async () => 'no-bills' as const,
+      loadBillDetail: async () => 'not-found' as const,
         now: fakeClock(),
       },
     )
@@ -716,5 +743,127 @@ describe('handleLineWebhook — `ยอด` (M7)', () => {
     const { calls, loadBalance } = await run([groupCommand('ยอด #เชียงใหม่')])
     expect(loadBalance).not.toHaveBeenCalled()
     expect(firstText(calls[0]?.messages ?? [])).toContain('ยังไม่เปิดใช้')
+  })
+})
+
+describe('handleLineWebhook — `บิล` (M8 / D45)', () => {
+  const BILLS = {
+    bills: [
+      { id: 'e1', description: 'ตี๋น้อย', spentAt: '2026-09-01', totalSatang: 90000 },
+      { id: 'e2', description: 'ข้าว', spentAt: '2026-08-31', totalSatang: 30000 },
+    ],
+    totalCount: 23,
+  } as const
+
+  it('วงที่ยังไม่เคยจดบิลตอบไกด์ ไม่ใช่ตอบรายการว่าง', async () => {
+    const { calls } = await run([groupCommand('บิล')])
+    expect(firstText(calls[0]?.messages ?? [])).toContain('+ ข้าว 1200')
+  })
+
+  it('มีบิลแล้วได้การ์ดรายการ พร้อมบอกจำนวนที่ไม่ได้แสดง', async () => {
+    const { calls } = await run([groupCommand('บิล')], undefined, [], {
+      loadBillList: async () => BILLS,
+    })
+    const message = calls[0]?.messages[0]
+    expect(message?.type).toBe('flex')
+    const json = JSON.stringify(message)
+    expect(json).toContain('ตี๋น้อย')
+    expect(json).toContain('bill=e1')
+    // 23 ทั้งหมด แสดง 2 → เหลือ 21 ที่ต้องบอก ห้ามตัดเงียบ (D31/D44)
+    expect(json).toContain('21')
+  })
+
+  it('อ่านรายการด้วยวงกับคนที่ถามจริง — 1:1 ส่ง `null` เป็นวง', async () => {
+    const asked: Array<[string | null, string]> = []
+    await run([directText('บิล')], undefined, [], {
+      loadBillList: async (lineGroupId, lineUserId) => {
+        asked.push([lineGroupId, lineUserId])
+        return BILLS
+      },
+    })
+    expect(asked).toEqual([[null, USER_ID]])
+  })
+
+  it('`บิล` เปล่าๆ ในกลุ่มไม่แตะ DB เลย (D47)', async () => {
+    const { reply, loadBillList } = await run([groupText('บิล')])
+    expect(loadBillList).not.toHaveBeenCalled()
+    expect(reply).not.toHaveBeenCalled()
+  })
+
+  it('ไม่รู้ว่าใครพิมพ์ก็หาวงส่วนตัวไม่ได้ — บอกสาเหตุ ไม่ใช่ตอบไกด์', async () => {
+    // LINE ไม่ส่ง `userId` มาเมื่อคนพิมพ์ยังไม่ยอมรับข้อตกลงบัญชีทางการ — เกิดในกลุ่ม
+    const { calls, loadBillList } = await run([
+      {
+        type: 'message',
+        replyToken: 'token-1',
+        timestamp: 1_787_000_000_000,
+        source: { type: 'group', groupId: GROUP_ID },
+        message: {
+          id: '1',
+          type: 'text',
+          text: '@บิลใหญ่ บิล',
+          mention: { mentionees: [{ index: 0, length: 8, isSelf: true }] },
+        },
+      },
+    ])
+    expect(loadBillList).not.toHaveBeenCalled()
+    expect(firstText(calls[0]?.messages ?? [])).toContain('ข้อตกลง')
+  })
+})
+
+describe('handleLineWebhook — กดแถวในรายการบิล', () => {
+  const DETAIL = {
+    description: 'ตี๋น้อย',
+    spentAt: '2026-09-01',
+    totalSatang: 90000,
+    lines: [
+      { name: 'นัท', amountSatang: 30000, isPayer: true },
+      { name: 'เดียร์', amountSatang: 60000, isPayer: false },
+    ],
+  } as const
+
+  it('ได้การ์ดรายละเอียดของใบนั้น', async () => {
+    const { calls } = await run([postback('bill=e1')], undefined, [], {
+      loadBillDetail: async () => DETAIL,
+    })
+    const json = JSON.stringify(calls[0]?.messages[0])
+    expect(json).toContain('ตี๋น้อย')
+    expect(json).toContain('1 ก.ย. 69')
+    expect(json).toContain('เดียร์')
+  })
+
+  it('ส่งวงกับคนกดไปให้ repo ด้วย — id เดี่ยวๆ ไม่พอที่จะให้สิทธิ์ดู', async () => {
+    // การ์ด `บิล` ลอยอยู่ในแชทได้ตลอดกาล และ postback data ปลอมได้ · ด่านที่กัน
+    // การดูข้ามวงอยู่ที่ repo ซึ่งจะทำงานไม่ได้เลยถ้าไม่รู้ว่าใครกดจากวงไหน
+    const { detailAsked } = await run([postback('bill=e1')])
+    expect(detailAsked).toEqual([{ expenseId: 'e1', lineGroupId: GROUP_ID, lineUserId: USER_ID }])
+  })
+
+  it('บิลที่ไม่มีในวงนี้ตอบว่าหาไม่เจอ — ไม่บอกว่ามีอยู่ที่อื่น', async () => {
+    const { calls } = await run([postback('bill=e1')], undefined, [], {
+      loadBillDetail: async () => 'not-found',
+    })
+    const text = firstText(calls[0]?.messages ?? [])
+    expect(text).toContain('ไม่เจอ')
+  })
+
+  it('บิลที่ถูกยกเลิกบอกว่ายกเลิก ไม่ใช่เงียบ และไม่ใช่โชว์ยอดเก่า', async () => {
+    const { calls } = await run([postback('bill=e1')], undefined, [], {
+      loadBillDetail: async () => 'voided',
+    })
+    const text = firstText(calls[0]?.messages ?? [])
+    expect(text).toContain('ยกเลิก')
+    expect(text).not.toContain('900')
+  })
+
+  it('`bill=` ที่ไม่มี id ไม่ใช่ postback ของเรา — เงียบ ไม่เดา', async () => {
+    const { reply, loadBillDetail } = await run([postback('bill=')])
+    expect(loadBillDetail).not.toHaveBeenCalled()
+    expect(reply).not.toHaveBeenCalled()
+  })
+
+  it('`confirm=` ยังทำงานเหมือนเดิม — สอง key แยกกันได้', async () => {
+    const { confirmed } = await run([postback('confirm=draft-1')])
+    expect(confirmed).toHaveLength(1)
   })
 })

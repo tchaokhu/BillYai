@@ -14,7 +14,7 @@ import { readAccessToken, readChannelSecret } from '@/lib/line/env'
 import { handleLineWebhook } from '@/lib/line/webhook'
 import { confirmDraft } from '@/lib/repo/confirm'
 import { createDraft } from '@/lib/repo/drafts'
-import { loadBalance, loadGroupView } from '@/lib/repo/views'
+import { loadBalance, loadBillDetail, loadBillList, loadGroupView } from '@/lib/repo/views'
 
 /**
  * ยังต้องเป็น node runtime — เส้นทางนี้ต่อ Postgres ด้วย `pg` และ `lib/line/flex.ts`
@@ -89,6 +89,8 @@ export async function POST(request: Request): Promise<Response> {
       fetchDisplayName: (lineGroupId, lineUserId) =>
         fetchDisplayName({ lineGroupId, lineUserId, accessToken }, { fetch }),
       loadBalance,
+      loadBillList,
+      loadBillDetail,
     },
   )
 

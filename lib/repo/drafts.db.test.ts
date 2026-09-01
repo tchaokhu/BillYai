@@ -51,9 +51,17 @@ function input(overrides: Partial<Parameters<typeof createDraft>[0]> = {}) {
   }
 }
 
-async function countDrafts(): Promise<number> {
+/**
+ * นับ draft **ของคนคนเดียว** ไม่ใช่ทั้งตาราง
+ *
+ * นับทั้งตารางจะ racy ทันทีที่มีไฟล์เทสต์อื่นสร้าง draft ขนานกันอยู่ — ซึ่งเกิดจริง
+ * ตั้งแต่ `views.db.test.ts` เดินเส้นทางจดบิลเต็มเส้น · `line_user_id` ที่สุ่มใหม่
+ * ทุกเทสต์ทำให้ตัวเลขเป็นของเทสต์นั้นคนเดียว ไม่ว่าใครจะรันอะไรอยู่ข้างๆ
+ */
+async function countDraftsFor(lineUserId: string): Promise<number> {
   const result = await getPool().query<{ n: number }>(
-    `select count(*)::int as n from expense_draft`,
+    `select count(*)::int as n from expense_draft where line_user_id = $1`,
+    [lineUserId],
   )
   return result.rows[0]?.n ?? -1
 }
@@ -111,10 +119,11 @@ describe('createDraft', () => {
   it('payload ที่ไม่ผ่านสัญญาต้องไม่ถูกเขียนลงไปตั้งแต่แรก', async () => {
     // throw อย่างเดียวไม่พอ — ถ้าตรวจตอนอ่านกลับแทนที่จะตรวจก่อนเขียน แถวเสีย
     // จะนอนอยู่ในตารางไปอีก 24 ชั่วโมงโดยไม่มีใครรู้
-    const before = await countDrafts()
+    const lineUserId = fakeLineUserId()
+    const before = await countDraftsFor(lineUserId)
     const broken = { ...DRAFT, totalSatang: 0 }
-    await expect(createDraft(input({ draft: broken }))).rejects.toThrow()
-    expect(await countDrafts()).toBe(before)
+    await expect(createDraft(input({ lineUserId, draft: broken }))).rejects.toThrow()
+    expect(await countDraftsFor(lineUserId)).toBe(before)
   })
 
   it('`lineUserId` ว่างไม่ได้ — D26 ต้องรู้ว่าใครพิมพ์', async () => {

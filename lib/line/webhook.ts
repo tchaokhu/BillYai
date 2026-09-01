@@ -10,11 +10,23 @@
 
 import type { ReplyOutcome } from './client'
 import { parseLineEvents, type LineEvent } from './events'
-import { balanceCardMessage, draftCardMessage, type IdentityChoice } from './flex'
+import {
+  balanceCardMessage,
+  billDetailCardMessage,
+  billListCardMessage,
+  draftCardMessage,
+  type IdentityChoice,
+} from './flex'
 import { verifyLineSignature } from './signature'
 import { stripMentions } from './mention'
 import { renderReply, type LineMessage } from './messages'
 import type { BalanceView } from '../flow/balance'
+import {
+  buildBillDetail,
+  buildBillList,
+  type BillDetailInput,
+  type BillListInput,
+} from '../flow/bills'
 import { buildDraft } from '../flow/draft'
 import { decideReply, type Surface } from '../flow/dispatch'
 import { parseAddressedMessage, parseMessage } from '../parser/rules'
@@ -86,6 +98,26 @@ export interface LineWebhookDeps {
     lineGroupId: string | null,
     lineUserId: string,
   ) => Promise<BalanceView | 'no-bills'>
+  /**
+   * รายการบิลล่าสุดของวง (D45) · `'no-bills'` = ยังไม่เคยจดสักใบ ตอบไกด์ด้วย
+   * เกณฑ์เดียวกับ `loadBalance`
+   */
+  loadBillList: (
+    lineGroupId: string | null,
+    lineUserId: string,
+  ) => Promise<BillListInput | 'no-bills'>
+  /**
+   * บิลใบเดียวจากการกดแถวในรายการ
+   *
+   * **รับวงกับคนกดไปด้วย ไม่ใช่แค่ id** — การ์ด `บิล` ลอยอยู่ในแชทได้ตลอดกาล และ
+   * postback data ไม่มีอะไรรับประกันว่า id ที่กลับมาเป็นของวงนี้ · ด่านที่กันการดู
+   * ข้ามวงอยู่ที่ repo ซึ่งทำงานไม่ได้เลยถ้าไม่รู้ว่าใครกดมาจากไหน
+   */
+  loadBillDetail: (input: {
+    expenseId: string
+    lineGroupId: string | null
+    lineUserId: string
+  }) => Promise<BillDetailInput | 'not-found' | 'voided'>
   /** นาฬิกาหน่วย ms — แยกออกมาเพื่อให้เทสต์กำหนดค่าได้ */
   now?: () => number
 }
@@ -148,6 +180,18 @@ async function messagesFor(event: LineEvent, deps: LineWebhookDeps): Promise<Lin
     return balanceCardMessage(view.blocks)
   }
 
+  if (plan.kind === 'bills') {
+    // ด่านเดียวกับ `ยอด` และเส้นทางจดบิล — ไม่รู้ว่าใครพิมพ์ก็หาวงส่วนตัวไม่ได้
+    if (event.source.lineUserId === null) return renderReply({ kind: 'unknown-sender' }, surface)
+    const lineGroupId = event.source.kind === 'group' ? event.source.lineGroupId : null
+    const list = await deps.loadBillList(lineGroupId, event.source.lineUserId)
+    // วงที่ยังไม่เคยจดบิลตอบไกด์ ไม่ใช่ตอบรายการว่าง — เกณฑ์เดียวกับ `ยอด`
+    if (list === 'no-bills') return renderReply({ kind: 'guide' }, surface)
+    const view = buildBillList(list)
+    if (view.kind === 'no-bills') return renderReply({ kind: 'guide' }, surface)
+    return billListCardMessage(view)
+  }
+
   if (plan.kind !== 'draft') return renderReply(plan, surface)
 
   const lineGroupId = event.source.kind === 'group' ? event.source.lineGroupId : null
@@ -195,6 +239,24 @@ async function messagesForPostback(
   deps: LineWebhookDeps,
 ): Promise<LineMessage[]> {
   const surface = surfaceOf(event)
+
+  /**
+   * `bill=<expenseId>` มาก่อน — คนละ key กับ `confirm=` จึงแยกกันได้โดยไม่กำกวม
+   *
+   * เส้นทางนี้อ่านอย่างเดียว ไม่มีอะไรถูกเขียน กดกี่ครั้งก็ได้ผลเหมือนเดิม
+   */
+  const billId = new URLSearchParams(event.data).get('bill')
+  if (billId !== null && billId !== '') {
+    const lineUserId = event.source.lineUserId
+    if (lineUserId === null) return renderReply({ kind: 'unknown-sender' }, surface)
+    const lineGroupId = event.source.kind === 'group' ? event.source.lineGroupId : null
+
+    const detail = await deps.loadBillDetail({ expenseId: billId, lineGroupId, lineUserId })
+    if (detail === 'not-found') return renderReply({ kind: 'bill-not-found' }, surface)
+    if (detail === 'voided') return renderReply({ kind: 'bill-voided' }, surface)
+    return billDetailCardMessage(buildBillDetail(detail))
+  }
+
   const parsed = parseConfirmData(event.data)
   // postback ที่ไม่ใช่ของเรา — เงียบ ไม่เดาว่าเป็นอะไร
   if (parsed === null) return []

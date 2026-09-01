@@ -12,7 +12,8 @@ import { makeGroup } from '@/lib/db/fixtures'
 import { confirmDraft } from './confirm'
 import { createDraft } from './drafts'
 import { markMemberLeft } from './members'
-import { loadBalance, loadGroupView } from './views'
+import { voidExpense } from './expenses'
+import { loadBalance, loadBillDetail, loadBillList, loadGroupView } from './views'
 import type { DraftLine, ExpenseDraft } from '@/lib/types'
 
 afterAll(async () => {
@@ -215,5 +216,144 @@ describe('loadBalance — คนที่ออกจากกลุ่มไป
 
     const after = await loadGroupView(lineGroupId, fakeLineUserId())
     expect(after.unclaimed.map((c) => c.name)).not.toContain('กอล์ฟ')
+  })
+})
+
+describe('loadBillList (D45)', () => {
+  it('วงที่ยังไม่เคยจดบิลตอบ `no-bills` — ตอบไกด์ ไม่ใช่รายการว่าง', async () => {
+    expect(await loadBillList(fakeLineGroupId(), fakeLineUserId())).toBe('no-bills')
+    expect(await loadBillList(null, fakeLineUserId())).toBe('no-bills')
+  })
+
+  it('วงที่มีอยู่แต่ยังไม่มีบิลก็ `no-bills`', async () => {
+    const group = await makeGroup()
+    expect(await loadBillList(group.lineGroupId, fakeLineUserId())).toBe('no-bills')
+  })
+
+  it('คืนบิลที่จดไว้ พร้อมจำนวนทั้งหมด', async () => {
+    const lineGroupId = fakeLineGroupId()
+    const lineUserId = fakeLineUserId()
+    await recordBill(lineGroupId, lineUserId, 'เบียร์')
+    await recordBill(lineGroupId, lineUserId, 'เบียร์')
+
+    const list = await loadBillList(lineGroupId, lineUserId)
+    if (list === 'no-bills') throw new Error('ต้องมีบิล')
+    expect(list.totalCount).toBe(2)
+    expect(list.bills).toHaveLength(2)
+    expect(list.bills[0]).toMatchObject({ description: 'ข้าว', spentAt: '2026-08-30' })
+    expect(list.bills.every((bill) => bill.id.length > 0)).toBe(true)
+  })
+
+  it('ตัดที่ 20 ใบ แต่ `totalCount` ยังบอกจำนวนจริง — ห้ามตัดเงียบ', async () => {
+    const lineGroupId = fakeLineGroupId()
+    const lineUserId = fakeLineUserId()
+    for (let i = 0; i < 22; i += 1) await recordBill(lineGroupId, lineUserId, 'เบียร์')
+
+    const list = await loadBillList(lineGroupId, lineUserId)
+    if (list === 'no-bills') throw new Error('ต้องมีบิล')
+    expect(list.bills).toHaveLength(20)
+    expect(list.totalCount).toBe(22)
+  })
+
+  it('วงอื่นไม่ปนเข้ามา', async () => {
+    const mine = fakeLineGroupId()
+    const theirs = fakeLineGroupId()
+    await recordBill(mine, fakeLineUserId(), 'เบียร์')
+    await recordBill(theirs, fakeLineUserId(), 'เบียร์')
+
+    const list = await loadBillList(mine, fakeLineUserId())
+    if (list === 'no-bills') throw new Error('ต้องมีบิล')
+    expect(list.totalCount).toBe(1)
+  })
+})
+
+describe('loadBillDetail (D45)', () => {
+  async function firstBillId(lineGroupId: string, lineUserId: string): Promise<string> {
+    const list = await loadBillList(lineGroupId, lineUserId)
+    if (list === 'no-bills') throw new Error('ต้องมีบิล')
+    const first = list.bills[0]
+    if (first === undefined) throw new Error('ต้องมีบิล')
+    return first.id
+  }
+
+  it('คืนรายละเอียดพร้อมรายคนและป้ายคนจ่าย', async () => {
+    const lineGroupId = fakeLineGroupId()
+    const lineUserId = fakeLineUserId()
+    await recordBill(lineGroupId, lineUserId, 'เบียร์')
+    const expenseId = await firstBillId(lineGroupId, lineUserId)
+
+    const detail = await loadBillDetail({ expenseId, lineGroupId, lineUserId })
+    if (detail === 'not-found' || detail === 'voided') throw new Error(`ไม่ควรได้ ${detail}`)
+    expect(detail.description).toBe('ข้าว')
+    expect(detail.spentAt).toBe('2026-08-30')
+    // ยอดรวมต้องเท่ากับผลรวมรายคนเป๊ะ — invariant เดียวกับที่สคีมาเขียนไว้
+    expect(detail.lines.reduce((sum, line) => sum + line.amountSatang, 0)).toBe(detail.totalSatang)
+    expect(detail.lines.map((line) => line.name).sort()).toEqual(['กอล์ฟ', 'ตูน'])
+  })
+
+  it('**บิลของวงอื่นตอบ `not-found`** — id เดี่ยวๆ ไม่ใช่สิทธิ์ดู', async () => {
+    // การ์ด `บิล` ลอยอยู่ในแชทได้ตลอดกาล และ postback data ปลอมได้ · ด่านนี้คือ
+    // ที่เดียวที่กันไม่ให้คนในวงหนึ่งอ่าน ledger ของอีกวง
+    const mine = fakeLineGroupId()
+    const theirs = fakeLineGroupId()
+    const theirUser = fakeLineUserId()
+    await recordBill(mine, fakeLineUserId(), 'เบียร์')
+    await recordBill(theirs, theirUser, 'เบียร์')
+    const theirBill = await firstBillId(theirs, theirUser)
+
+    expect(
+      await loadBillDetail({ expenseId: theirBill, lineGroupId: mine, lineUserId: fakeLineUserId() }),
+    ).toBe('not-found')
+  })
+
+  it('id ที่ไม่มีอยู่จริงตอบ `not-found` ไม่ throw', async () => {
+    const lineGroupId = fakeLineGroupId()
+    const lineUserId = fakeLineUserId()
+    await recordBill(lineGroupId, lineUserId, 'เบียร์')
+    expect(await loadBillDetail({ expenseId: randomUUID(), lineGroupId, lineUserId })).toBe(
+      'not-found',
+    )
+  })
+
+  it('วงที่ยังไม่มีตอบ `not-found` ไม่ throw', async () => {
+    expect(
+      await loadBillDetail({
+        expenseId: randomUUID(),
+        lineGroupId: fakeLineGroupId(),
+        lineUserId: fakeLineUserId(),
+      }),
+    ).toBe('not-found')
+  })
+
+  it('บิลที่ถูกยกเลิกตอบ `voided` — ไม่ใช่ `not-found` และไม่ใช่ยอดเก่า', async () => {
+    const lineGroupId = fakeLineGroupId()
+    const lineUserId = fakeLineUserId()
+    await recordBill(lineGroupId, lineUserId, 'เบียร์')
+    const expenseId = await firstBillId(lineGroupId, lineUserId)
+
+    const before = await loadBillDetail({ expenseId, lineGroupId, lineUserId })
+    if (before === 'not-found' || before === 'voided') throw new Error('ต้องอ่านได้ก่อนยกเลิก')
+    await voidExpense(expenseId)
+
+    expect(await loadBillDetail({ expenseId, lineGroupId, lineUserId })).toBe('voided')
+  })
+
+  it('ชื่อคนที่ออกจากกลุ่มไปแล้วต้องยังอยู่ในบิลเก่า', async () => {
+    // `listMembers` ตัดคนที่ออกไปแล้วโดย default — ลืม `includeLeft` แปลว่าแถวของเขา
+    // หายจากการ์ดเงียบๆ แล้วยอดรวมจะไม่ตรงกับผลรวมรายคนที่เห็น
+    const lineGroupId = fakeLineGroupId()
+    const lineUserId = fakeLineUserId()
+    await recordBill(lineGroupId, lineUserId, 'เบียร์')
+    const expenseId = await firstBillId(lineGroupId, lineUserId)
+
+    const view = await loadGroupView(lineGroupId, lineUserId)
+    const golf = view.unclaimed.find((choice) => choice.name === 'กอล์ฟ')
+    if (golf === undefined) throw new Error('ต้องมีกอล์ฟใน Roster')
+    await markMemberLeft(golf.id)
+
+    const detail = await loadBillDetail({ expenseId, lineGroupId, lineUserId })
+    if (detail === 'not-found' || detail === 'voided') throw new Error(`ไม่ควรได้ ${detail}`)
+    expect(detail.lines.map((line) => line.name)).toContain('กอล์ฟ')
+    expect(detail.lines.reduce((sum, line) => sum + line.amountSatang, 0)).toBe(detail.totalSatang)
   })
 })

@@ -134,3 +134,26 @@ describe('decideReply — D47: คำสั่งคีย์เวิร์ด�
     })
   })
 })
+
+describe('decideReply — `บิล` (D45)', () => {
+  const bills: ParseResult = { kind: 'command', command: 'bills' }
+
+  it('เรียกบอทแล้วพิมพ์ `บิล` ในกลุ่ม = เจตนาอ่านรายการ', () => {
+    // ตัว `decideReply` ไม่แตะ I/O — รายการบิลต้องอ่านที่ชั้นถัดไป
+    expect(decideReply({ surface: 'group', addressed: true }, bills)).toEqual({ kind: 'bills' })
+  })
+
+  it('ใน 1:1 ไม่ต้องเรียกบอท', () => {
+    expect(decideReply({ surface: 'direct', addressed: false }, bills)).toEqual({ kind: 'bills' })
+  })
+
+  it('`บิล` เปล่าๆ ในกลุ่มยังเงียบตาม D47', () => {
+    expect(decideReply({ surface: 'group', addressed: false }, bills)).toEqual({ kind: 'silent' })
+  })
+
+  it('`บิล #tag` ยังไม่เปิดใช้ (D34)', () => {
+    expect(
+      decideReply({ surface: 'group', addressed: true }, { kind: 'command', command: 'bills', args: '#เชียงใหม่' }),
+    ).toEqual({ kind: 'not-available', what: 'command' })
+  })
+})
