@@ -31,6 +31,7 @@ function text(value: string): LineTextMessage[] {
  */
 const COMMAND_HELP: ReadonlyArray<{ command: BotCommand; line: string }> = [
   { command: 'balance', line: 'ยอด — สรุปว่าใครติดใครเท่าไหร่' },
+  { command: 'bills', line: 'บิล — รายการบิลที่จดไว้ กดดูรายละเอียดได้' },
   { command: 'nudge', line: 'ทวง — การ์ดทวงพร้อม QR ยอดเป๊ะ' },
   { command: 'edit', line: 'แก้ — เปิดหน้าจัดการบิล' },
   { command: 'undo', line: 'เลิก — ยกเลิกคำสั่งล่าสุดของตัวเอง' },

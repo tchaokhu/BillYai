@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { balanceCardMessage, draftCardMessage } from './flex'
+import { balanceCardMessage, billDetailCardMessage, billListCardMessage, draftCardMessage } from './flex'
 import type { DraftCard } from '../flow/draft'
 
 const CARD: DraftCard = {
@@ -305,5 +305,109 @@ describe('balanceCardMessage — การ์ด `ยอด` (D31)', () => {
     // ทุกเจ้าหนี้ยังอยู่ครบ ไม่มีใครถูกตัดทิ้งเงียบๆ
     const joined = messages.map((m) => (m.type === 'text' ? m.text : '')).join('')
     expect(joined.split('ได้คืน')).toHaveLength(21)
+  })
+})
+
+/** ไล่เก็บ postback data ทุกอันในโครง Flex */
+function allPostbackData(node: unknown): string[] {
+  if (Array.isArray(node)) return node.flatMap(allPostbackData)
+  if (typeof node !== 'object' || node === null) return []
+  const record = node as Record<string, unknown>
+  const action = record.action as Record<string, unknown> | undefined
+  const here =
+    action !== undefined && action.type === 'postback' && typeof action.data === 'string'
+      ? [action.data]
+      : []
+  return [...here, ...Object.values(record).flatMap(allPostbackData)]
+}
+
+function billRows(count: number) {
+  return Array.from({ length: count }, (_, i) => ({
+    id: `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`,
+    description: `บิลที่ ${i + 1}`,
+    date: '1 ก.ย. 69',
+    totalSatang: 90000,
+  }))
+}
+
+describe('billListCardMessage — รายการบิล (D45)', () => {
+  it('หนึ่งบิลหนึ่งแถว โชว์ชื่อ วันที่ ยอด', () => {
+    const [message] = billListCardMessage({ kind: 'bills', rows: billRows(2), omitted: 0 })
+    const texts = allText(message)
+    expect(texts).toContain('บิลที่ 1')
+    expect(texts).toContain('1 ก.ย. 69')
+    expect(texts.some((t) => t.includes('900'))).toBe(true)
+  })
+
+  it('ทุกแถวกดได้ และ postback พา `expense.id` เท่านั้น', () => {
+    const rows = billRows(3)
+    const [message] = billListCardMessage({ kind: 'bills', rows, omitted: 0 })
+    expect(allPostbackData(message)).toEqual(rows.map((r) => `bill=${r.id}`))
+  })
+
+  it('postback data ไม่มีชื่อบิลอยู่ในนั้นเลย — เพดาน 300 (ADR 0002)', () => {
+    // ชื่อไทยผ่าน `encodeURIComponent` ยาวขึ้นเก้าเท่า · uuid ยาวคงที่เสมอ
+    const rows = [
+      { id: '00000000-0000-4000-8000-000000000001', description: 'หมูกระทะบุฟเฟต์ริมน้ำเจ้าเก่า', date: '1 ก.ย. 69', totalSatang: 90000 },
+    ]
+    for (const data of allPostbackData(billListCardMessage({ kind: 'bills', rows, omitted: 0 })[0])) {
+      expect(data).not.toContain('หมูกระทะ')
+      expect(data.length).toBeLessThanOrEqual(300)
+    }
+  })
+
+  it('บอกจำนวนที่ไม่ได้แสดง — ห้ามตัดเงียบ (D31/D44)', () => {
+    const shown = billListCardMessage({ kind: 'bills', rows: billRows(20), omitted: 3 })
+    expect(allText(shown[0]).join('\n')).toContain('3')
+  })
+
+  it('ไม่มีของที่ถูกตัดก็ไม่ต้องพูดถึง', () => {
+    const texts = allText(billListCardMessage({ kind: 'bills', rows: billRows(2), omitted: 0 })).join('\n')
+    expect(texts).not.toContain('อีก')
+  })
+
+  it('altText บอกจำนวนบิล — คนเห็นบรรทัดนี้ก่อนเห็นการ์ด', () => {
+    const [message] = billListCardMessage({ kind: 'bills', rows: billRows(2), omitted: 0 })
+    expect(message?.type === 'flex' && message.altText).toContain('2')
+  })
+
+  it('ยาวเกิน bubble ลดรูปเป็นข้อความ ไม่ตัดใบไหนทิ้ง (D44)', () => {
+    const messages = billListCardMessage({ kind: 'bills', rows: billRows(400), omitted: 0 })
+    expect(messages.every((m) => m.type === 'text')).toBe(true)
+    const joined = messages.map((m) => (m.type === 'text' ? m.text : '')).join('\n')
+    expect(joined).toContain('บิลที่ 1')
+    for (const message of messages) {
+      if (message.type === 'text') expect(message.text.length).toBeLessThanOrEqual(5000)
+    }
+    expect(messages.length).toBeLessThanOrEqual(5)
+  })
+})
+
+describe('billDetailCardMessage — บิลใบเดียว', () => {
+  const DETAIL = {
+    description: 'ตี๋น้อย',
+    date: '1 ก.ย. 69',
+    totalSatang: 90000,
+    lines: [
+      { name: 'นัท', amountSatang: 30000, isPayer: true },
+      { name: 'เดียร์', amountSatang: 30000, isPayer: false },
+    ],
+  }
+
+  it('โชว์ชื่อบิล วันที่ ยอดรวม และรายคนครบ', () => {
+    const texts = allText(billDetailCardMessage(DETAIL)[0]).join('\n')
+    expect(texts).toContain('ตี๋น้อย')
+    expect(texts).toContain('1 ก.ย. 69')
+    expect(texts).toContain('นัท')
+    expect(texts).toContain('เดียร์')
+  })
+
+  it('ป้ายบอกว่าใครเป็นคนจ่าย — ยอดรายคนอ่านไม่รู้เรื่องถ้าไม่รู้ว่าใครออกก่อน', () => {
+    const texts = allText(billDetailCardMessage(DETAIL)[0]).join('\n')
+    expect(texts).toContain('จ่าย')
+  })
+
+  it('ไม่มีปุ่ม — บิลลง ledger ไปแล้ว ไม่มีอะไรให้กดยืนยันอีก', () => {
+    expect(allPostbackData(billDetailCardMessage(DETAIL)[0])).toEqual([])
   })
 })
