@@ -291,3 +291,58 @@ npm run spike:s4 -- https://<โดเมน>/api/line/webhook
 เอาผลไปกรอก `docs/SPIKE-PHASE0.md` หัวข้อ S2
 
 หน้า `/liff/spike` เป็นของชั่วคราวของ Phase 0 — ลบทิ้งได้เมื่อ S2 บันทึกผลแล้ว
+
+---
+
+## กับดักที่เจอตอน deploy Phase 1 จริง (1 ก.ย. 2026)
+
+ทั้งหมดนี้เจอเรียงกันในเซสชันเดียว แต่ละอันกินเวลาไล่หลายนาทีเพราะอาการที่เห็น
+จากฝั่ง LINE เหมือนกันหมด: **บอทเงียบ**
+
+### `405 Method Not Allowed` ตอนกด Verify = URL ขาด path
+
+โค้ดเราตอบ `405` **เฉพาะ GET** (`app/api/line/webhook/route.ts`) ส่วน Verify ยิง POST
+— ถ้าถึง handler จริงจะได้ 200/401/500 ไม่มีทางเป็น 405 · Next.js App Router ตอบ POST
+ที่ยิงใส่ **page** ด้วย 405 พอดี เพราะฉะนั้น 405 แปลว่าช่อง Webhook URL ชี้ไปที่หน้าเว็บ
+ไม่ใช่ `/api/line/webhook` · path ที่ไม่มีจริงจะได้ 404 ไม่ใช่ 405 — ตัวเลขสองตัวนี้
+แยกกันได้
+
+### รูปแบบบรรทัด log คือลายนิ้วมือของเวอร์ชันที่ deploy อยู่
+
+log ของ M3 มี `db=` · ของ Phase 1 มี `replied=` แทน · เห็น `db=` ในกล่อง log เมื่อไหร่
+แปลว่า request วิ่งเข้า deployment ที่ build จากคอมมิตเก่า ไม่ใช่ของที่เพิ่งเขียน —
+ตรวจได้เร็วกว่าไล่ config ทีละช่อง (`git log -S` หาบรรทัดนั้นเจอคอมมิตทันที)
+
+### แก้ env แล้วต้อง Redeploy เสมอ
+
+Vercel ผูกค่า env เข้ากับ deployment **ตอน deploy** ไม่ได้อ่านสดทุก request · เพิ่ม
+หรือแก้ค่าแล้วไม่ Redeploy = deployment เดิมยังถือค่าเก่าอยู่ · อาการที่ได้คือ "ใส่ค่า
+ถูกแล้วแต่ยังพังเหมือนเดิม" ซึ่งชวนให้ไปสงสัยค่าที่เพิ่งใส่ว่าผิด
+
+### `main` เท่านั้นที่ได้โดเมน production
+
+branch อื่นได้ preview URL ของตัวเอง `https://<project>-git-<branch>-<scope>.vercel.app`
+ซึ่ง**ใช้เป็น Webhook URL ได้ตามปกติ** LINE ไม่สนใจว่าเป็นโดเมนไหน ขอแค่ HTTPS สาธารณะ ·
+นี่คือวิธีทดสอบโค้ดที่ยังไม่ merge โดยไม่ต้องเอาของที่ยังไม่เคยยิงจริงขึ้น `main`
+
+**ต้องปิด Deployment Protection ก่อน** ไม่งั้น LINE ได้ `302` ไป `vercel.com/sso-api`
+แล้ว Verify ไม่ผ่านโดยไม่มีอะไรบอกสาเหตุ · **เปิดกลับหลังย้าย webhook มา production**
+
+`<scope>` ดูจาก URL ของ dashboard เอง (`vercel.com/<scope>/<project>`) แต่**ก๊อป host
+จริงจากหน้า deployment** อย่าประกอบเอง — Vercel ตัดชื่อ project ให้สั้นลงได้ ทำให้
+ชื่อที่เดาไว้กลายเป็น `DEPLOYMENT_NOT_FOUND`
+
+### แยกสาเหตุจาก status กับ `total=`
+
+| ที่เห็น | แปลว่า |
+|---|---|
+| ไม่มีบรรทัด `[webhook]` เลย | request ไม่ถึงโค้ดเรา — Deployment Protection, URL ผิด, หรือ `Use webhook` ปิด |
+| `302` | Deployment Protection ยังเปิด |
+| `405` | Webhook URL ชี้ไปที่ page ไม่ใช่ route |
+| `401` | `LINE_CHANNEL_SECRET` ไม่ตรงกับ channel ที่กด Verify (ค่าว่างจะได้ `500` ไม่ใช่ `401`) |
+| `500` + `total` ~1 ms | env หาย — throw ทันทีตอนอ่าน ไม่ได้ต่อเน็ตเลย |
+| `500` + `total` หลักร้อย ms + `prepareFailed=` | ต่อ DB ได้แล้วแต่ query พัง — migration ไม่ครบ หรือรหัสผ่านผิด |
+| `200` + `replied=0` | เข้ามาถึงแล้วโค้ดตัดสินใจไม่ตอบ (กฎเงียบ) ไม่ใช่ความผิดพลาด |
+
+`total=` แยก "env หาย" ออกจาก "DB พัง" ได้โดยไม่ต้องเดา — การต่อ Supabase จริงกิน
+เวลาหลักร้อยมิลลิวินาที ส่วน `throw` ตอนอ่าน `process.env` จบใน 1–2 ms
