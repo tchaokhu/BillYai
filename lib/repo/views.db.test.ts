@@ -286,8 +286,8 @@ describe('loadBillDetail (D45)', () => {
     if (detail === 'not-found' || detail === 'voided') throw new Error(`ไม่ควรได้ ${detail}`)
     expect(detail.description).toBe('ข้าว')
     expect(detail.spentAt).toBe('2026-08-30')
-    // ยอดรวมต้องเท่ากับผลรวมรายคนเป๊ะ — invariant เดียวกับที่สคีมาเขียนไว้
-    expect(detail.lines.reduce((sum, line) => sum + line.amountSatang, 0)).toBe(detail.totalSatang)
+    // ผลรวมรายคนต้องเท่ากับยอดบิลเป๊ะ — invariant เดียวกับที่สคีมาเขียนไว้
+    expect(detail.lines.reduce((sum, line) => sum + line.amountSatang, 0)).toBe(120000)
     expect(detail.lines.map((line) => line.name).sort()).toEqual(['กอล์ฟ', 'ตูน'])
   })
 
@@ -354,6 +354,45 @@ describe('loadBillDetail (D45)', () => {
     const detail = await loadBillDetail({ expenseId, lineGroupId, lineUserId })
     if (detail === 'not-found' || detail === 'voided') throw new Error(`ไม่ควรได้ ${detail}`)
     expect(detail.lines.map((line) => line.name)).toContain('กอล์ฟ')
-    expect(detail.lines.reduce((sum, line) => sum + line.amountSatang, 0)).toBe(detail.totalSatang)
+    // ยอดยังครบทั้งใบ — แถวที่หายไปเงียบๆ จะทำให้ผลรวมขาดไปครึ่งหนึ่งพอดี
+    expect(detail.lines.reduce((sum, line) => sum + line.amountSatang, 0)).toBe(120000)
+  })
+})
+
+describe('loadBillList / loadBillDetail — ที่ code review จับได้', () => {
+  it('บอกคนจ่ายได้แม้เขาไม่ได้ร่วมหาร — รูปแบบที่ใช้บ่อยที่สุด', async () => {
+    // `+ ข้าว 1200 กอล์ฟ ตูน` ระบุชื่อแล้วคนจ่ายไม่ร่วมหาร (D43) เขาจึงไม่มีแถวใน
+    // `expense_share` · ก่อนแก้ การ์ดใบนี้ไม่บอกเลยว่าใครออกเงิน
+    const lineGroupId = fakeLineGroupId()
+    const lineUserId = fakeLineUserId()
+    await recordBill(lineGroupId, lineUserId, 'เบียร์')
+
+    const list = await loadBillList(lineGroupId, lineUserId)
+    if (list === 'no-bills') throw new Error('ต้องมีบิล')
+    const first = list.bills[0]
+    if (first === undefined) throw new Error('ต้องมีบิล')
+
+    const detail = await loadBillDetail({ expenseId: first.id, lineGroupId, lineUserId })
+    if (detail === 'not-found' || detail === 'voided') throw new Error(`ไม่ควรได้ ${detail}`)
+    expect(detail.payerName).toBe('เบียร์')
+    expect(detail.lines.map((line) => line.name)).not.toContain('เบียร์')
+  })
+
+  it('ยอดในแถวรายการตรงกับยอดในการ์ดรายละเอียดเป๊ะ', async () => {
+    // สองที่คิดคนละทางเมื่อไหร่ คนกดแถวจะเห็นเลขไม่ตรงกับที่เพิ่งอ่าน
+    const lineGroupId = fakeLineGroupId()
+    const lineUserId = fakeLineUserId()
+    await recordBill(lineGroupId, lineUserId, 'เบียร์')
+
+    const list = await loadBillList(lineGroupId, lineUserId)
+    if (list === 'no-bills') throw new Error('ต้องมีบิล')
+    const first = list.bills[0]
+    if (first === undefined) throw new Error('ต้องมีบิล')
+
+    const detail = await loadBillDetail({ expenseId: first.id, lineGroupId, lineUserId })
+    if (detail === 'not-found' || detail === 'voided') throw new Error(`ไม่ควรได้ ${detail}`)
+    expect(first.totalSatang).toBe(
+      detail.lines.reduce((sum, line) => sum + line.amountSatang, 0),
+    )
   })
 })

@@ -72,28 +72,41 @@ export interface BillDetailLine {
 export interface BillDetailInput {
   description: string
   spentAt: string
-  totalSatang: number
+  /**
+   * ชื่อคนที่ควักเงิน — **มาแยกจากรายการแถว ไม่ใช่หาเอาจาก `isPayer`**
+   *
+   * `+ ข้าว 1200 กอล์ฟ ตูน` ระบุชื่อแล้วคนจ่ายไม่ร่วมหาร (D43) เขาจึงไม่มีแถวใน
+   * `expense_share` เลย · การ์ดที่รู้จักคนจ่ายผ่านแถวอย่างเดียวจะไม่บอกว่าใครออก
+   * เงินในบิลแบบนี้ ซึ่งทำให้ยอดรายคนทั้งใบอ่านไม่รู้เรื่อง
+   */
+  payerName: string
   lines: readonly BillDetailLine[]
 }
 
 export interface BillDetailView {
   description: string
   date: string
+  payerName: string
   totalSatang: number
   lines: BillDetailLine[]
 }
 
 /**
- * บิลใบเดียวพร้อมรายคน — **คัดลอกตัวเลขมาตรงๆ ไม่คิดใหม่**
+ * บิลใบเดียวพร้อมรายคน — **คัดลอกยอดรายคนมาตรงๆ ไม่คิดใหม่**
  *
- * ยอดที่โชว์ต้องเป็นตัวเดียวกับที่ลง `expense_share` ไว้ · การ์ดที่คำนวณเองจะเริ่ม
- * เพี้ยนจาก ledger ในวันที่สูตรสองฝั่งไม่ตรงกัน แล้วไม่มีใครรู้ว่าฝั่งไหนผิด
+ * ยอดที่โชว์ต้องเป็นตัวเดียวกับที่ลง `expense_share` ไว้ · การ์ดที่คำนวณส่วนแบ่งเอง
+ * จะเริ่มเพี้ยนจาก ledger ในวันที่สูตรสองฝั่งไม่ตรงกัน แล้วไม่มีใครรู้ว่าฝั่งไหนผิด
+ *
+ * **ยอดรวมบวกจากแถวที่โชว์ ไม่ใช่รับมาแยก** — คนอ่านการ์ดบวกเลขที่เห็นเองได้ และ
+ * ตัวเลขที่บวกไม่ตรงกับที่พิมพ์ไว้ข้างบนคือสิ่งที่ทำให้คนเลิกเชื่อทั้งใบ
  */
 export function buildBillDetail(input: BillDetailInput): BillDetailView {
+  const lines = input.lines.map((line) => ({ ...line }))
   return {
     description: input.description,
     date: thaiShortDate(input.spentAt),
-    totalSatang: input.totalSatang,
-    lines: input.lines.map((line) => ({ ...line })),
+    payerName: input.payerName,
+    totalSatang: lines.reduce((sum, line) => sum + line.amountSatang, 0),
+    lines,
   }
 }

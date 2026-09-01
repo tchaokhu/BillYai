@@ -815,7 +815,7 @@ describe('handleLineWebhook — กดแถวในรายการบิล
   const DETAIL = {
     description: 'ตี๋น้อย',
     spentAt: '2026-09-01',
-    totalSatang: 90000,
+    payerName: 'นัท',
     lines: [
       { name: 'นัท', amountSatang: 30000, isPayer: true },
       { name: 'เดียร์', amountSatang: 60000, isPayer: false },

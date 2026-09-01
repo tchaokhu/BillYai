@@ -63,7 +63,7 @@ describe('buildBillDetail — บิลใบเดียว', () => {
       buildBillDetail({
         description: 'ตี๋น้อย',
         spentAt: '2026-09-01',
-        totalSatang: 90000,
+        payerName: 'นัท',
         lines: [
           { name: 'นัท', amountSatang: 30000, isPayer: true },
           { name: 'เดียร์', amountSatang: 30000, isPayer: false },
@@ -73,6 +73,7 @@ describe('buildBillDetail — บิลใบเดียว', () => {
     ).toEqual({
       description: 'ตี๋น้อย',
       date: '1 ก.ย. 69',
+      payerName: 'นัท',
       totalSatang: 90000,
       lines: [
         { name: 'นัท', amountSatang: 30000, isPayer: true },
@@ -87,7 +88,7 @@ describe('buildBillDetail — บิลใบเดียว', () => {
     const detail = buildBillDetail({
       description: 'ข้าว',
       spentAt: '2026-08-31',
-      totalSatang: 30001,
+      payerName: 'นัท',
       lines: [
         { name: 'นัท', amountSatang: 15001, isPayer: true },
         { name: 'กอล์ฟ', amountSatang: 15000, isPayer: false },
@@ -95,5 +96,37 @@ describe('buildBillDetail — บิลใบเดียว', () => {
     })
     expect(detail.totalSatang).toBe(30001)
     expect(detail.lines.reduce((sum, line) => sum + line.amountSatang, 0)).toBe(30001)
+  })
+})
+
+describe('buildBillDetail — คนจ่ายที่ไม่ได้ร่วมหาร', () => {
+  it('พา `payerName` ออกมาเสมอ แม้คนจ่ายไม่มีแถวของตัวเองในบิล', () => {
+    // `+ ข้าว 1200 กอล์ฟ ตูน` — ระบุชื่อแล้วคนจ่ายไม่ร่วมหาร (D43) จึงไม่มีแถว
+    // ใน `expense_share` เลย · ถ้าการ์ดรู้จักคนจ่ายผ่าน `isPayer` ของแถวอย่างเดียว
+    // บิลแบบนี้จะไม่บอกว่าใครออกเงิน ซึ่งทำให้ยอดรายคนอ่านไม่รู้เรื่องทั้งใบ
+    const detail = buildBillDetail({
+      description: 'ข้าว',
+      spentAt: '2026-09-01',
+      payerName: 'นัท',
+      lines: [
+        { name: 'กอล์ฟ', amountSatang: 60000, isPayer: false },
+        { name: 'ตูน', amountSatang: 60000, isPayer: false },
+      ],
+    })
+    expect(detail.payerName).toBe('นัท')
+    expect(detail.totalSatang).toBe(120000)
+  })
+
+  it('ยอดรวมมาจากผลรวมรายคน ไม่ใช่ค่าที่ผู้เรียกส่งมาแยก', () => {
+    const detail = buildBillDetail({
+      description: 'ข้าว',
+      spentAt: '2026-08-31',
+      payerName: 'นัท',
+      lines: [
+        { name: 'นัท', amountSatang: 15001, isPayer: true },
+        { name: 'กอล์ฟ', amountSatang: 15000, isPayer: false },
+      ],
+    })
+    expect(detail.totalSatang).toBe(30001)
   })
 })
