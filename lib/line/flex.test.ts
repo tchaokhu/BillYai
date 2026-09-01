@@ -308,6 +308,17 @@ describe('balanceCardMessage — การ์ด `ยอด` (D31)', () => {
   })
 })
 
+/** ไล่เก็บ `displayText` ทุกอันในโครง Flex — LINE จำกัดไว้ 300 ตัวอักษร */
+function allDisplayText(node: unknown): string[] {
+  if (Array.isArray(node)) return node.flatMap(allDisplayText)
+  if (typeof node !== 'object' || node === null) return []
+  const record = node as Record<string, unknown>
+  const action = record.action as Record<string, unknown> | undefined
+  const here =
+    action !== undefined && typeof action.displayText === 'string' ? [action.displayText] : []
+  return [...here, ...Object.values(record).flatMap(allDisplayText)]
+}
+
 /** ไล่เก็บ postback data ทุกอันในโครง Flex */
 function allPostbackData(node: unknown): string[] {
   if (Array.isArray(node)) return node.flatMap(allPostbackData)
@@ -387,6 +398,7 @@ describe('billDetailCardMessage — บิลใบเดียว', () => {
   const DETAIL = {
     description: 'ตี๋น้อย',
     date: '1 ก.ย. 69',
+    payerName: 'นัท',
     totalSatang: 90000,
     lines: [
       { name: 'นัท', amountSatang: 30000, isPayer: true },
@@ -409,5 +421,62 @@ describe('billDetailCardMessage — บิลใบเดียว', () => {
 
   it('ไม่มีปุ่ม — บิลลง ledger ไปแล้ว ไม่มีอะไรให้กดยืนยันอีก', () => {
     expect(allPostbackData(billDetailCardMessage(DETAIL)[0])).toEqual([])
+  })
+})
+
+describe('billListCardMessage — ของที่ยาวเกินเพดานของ LINE', () => {
+  it('`displayText` ของ postback ต้องถูกตัด — เพดาน 300 ตัวอักษร', () => {
+    // คำอธิบายบิลยาวได้ถึงเพดานข้อความของ LINE (เส้น @mention ไม่ต้องมี `+` นำหน้า)
+    // · ทะลุเมื่อไหร่ LINE ปฏิเสธ reply ทั้งก้อน แล้วคนพิมพ์ `บิล` จะไม่เห็นอะไรเลย
+    const long = 'ก'.repeat(400)
+    const [message] = billListCardMessage({
+      kind: 'bills',
+      rows: [{ id: 'e1', description: long, date: '1 ก.ย. 69', totalSatang: 90000 }],
+      omitted: 0,
+    })
+    for (const value of allDisplayText(message)) {
+      expect(value.length).toBeLessThanOrEqual(300)
+    }
+  })
+
+  it('ลดรูปเป็นข้อความแล้วต้องบอกด้วยว่าแถวกดไม่ได้', () => {
+    // ข้อความไม่มี action — คนที่เคยกดแถวได้จะกดแล้วไม่เกิดอะไรโดยไม่รู้สาเหตุ
+    const messages = billListCardMessage({ kind: 'bills', rows: billRows(400), omitted: 0 })
+    const joined = messages.map((m) => (m.type === 'text' ? m.text : '')).join('\n')
+    expect(joined).toContain('กด')
+  })
+})
+
+describe('billDetailCardMessage — ขนาดกับคนจ่าย', () => {
+  function detail(lineCount: number, payerName = 'นัท') {
+    return {
+      description: 'ตี๋น้อย',
+      date: '1 ก.ย. 69',
+      payerName,
+      totalSatang: lineCount * 10000,
+      lines: Array.from({ length: lineCount }, (_, i) => ({
+        name: `คนที่ ${i + 1}`,
+        amountSatang: 10000,
+        isPayer: false,
+      })),
+    }
+  }
+
+  it('บอกว่าใครจ่าย แม้คนจ่ายจะไม่มีแถวของตัวเองในบิล', () => {
+    const texts = allText(billDetailCardMessage(detail(2))[0]).join('\n')
+    expect(texts).toContain('นัท')
+    expect(texts).toContain('จ่าย')
+  })
+
+  it('การ์ดที่ใหญ่เกิน bubble ลดรูปเป็นข้อความ ไม่ให้ LINE ปฏิเสธทั้งก้อน', () => {
+    const messages = billDetailCardMessage(detail(300))
+    expect(messages.every((m) => m.type === 'text')).toBe(true)
+    const joined = messages.map((m) => (m.type === 'text' ? m.text : '')).join('\n')
+    expect(joined).toContain('ตี๋น้อย')
+    expect(joined).toContain('นัท')
+    for (const message of messages) {
+      if (message.type === 'text') expect(message.text.length).toBeLessThanOrEqual(5000)
+    }
+    expect(messages.length).toBeLessThanOrEqual(5)
   })
 })

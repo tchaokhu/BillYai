@@ -463,7 +463,10 @@ function billListBubble(rows: readonly BillRow[], omitted: number): LineFlexMess
         type: 'postback',
         label: shorten(bill.description, MAX_LABEL),
         data: `bill=${bill.id}`,
-        displayText: bill.description,
+        // **ต้องตัดเหมือน `label`** — เพดาน `displayText` คือ 300 ตัวอักษร และ
+        // คำอธิบายบิลยาวได้ถึงเพดานข้อความของ LINE (ดู `MAX_DESCRIPTION`) ·
+        // ทะลุเมื่อไหร่ LINE ปฏิเสธ reply ทั้งก้อน แล้วคนพิมพ์ `บิล` ไม่เห็นอะไรเลย
+        displayText: shorten(bill.description, MAX_NAME),
       },
       contents: [
         { type: 'text', text: shorten(bill.description, MAX_NAME), size: 'sm', flex: 4 },
@@ -533,6 +536,9 @@ export function billListCardMessage(view: {
     push('')
     push(`ยังมีอีก ${view.omitted} ใบที่ไม่ได้แสดง`)
   }
+  // ข้อความไม่มี action — คนที่เคยกดแถวได้จะกดแล้วไม่เกิดอะไรโดยไม่รู้สาเหตุ
+  push('')
+  push('รายการยาวเกินกว่าจะทำเป็นการ์ด แถวนี้จึงกดไม่ได้')
   chunks.push(current)
 
   if (chunks.length > MAX_MESSAGES) {
@@ -555,12 +561,26 @@ export function billListCardMessage(view: {
 export function billDetailCardMessage(detail: {
   description: string
   date: string
+  payerName: string
   totalSatang: number
   lines: readonly { name: string; amountSatang: number; isPayer: boolean }[]
 }): LineMessage[] {
   const contents: FlexComponent[] = [
     { type: 'text', text: shorten(detail.description, MAX_DESCRIPTION), size: 'lg', weight: 'bold', wrap: true },
     { type: 'text', text: detail.date, size: 'sm', color: '#555555' },
+    /**
+     * **บรรทัดคนจ่ายอยู่ตรงนี้เสมอ ไม่ใช่ป้ายท้ายชื่อในแถว**
+     *
+     * `+ ข้าว 1200 กอล์ฟ ตูน` ระบุชื่อแล้วคนจ่ายไม่ร่วมหาร (D43) เขาจึงไม่มีแถว
+     * ในบิลเลย · ป้ายท้ายชื่อจึงหายทั้งใบพอดีในรูปแบบที่คนใช้บ่อยที่สุด แล้วยอด
+     * รายคนกลายเป็นตัวเลขที่ไม่มีใครรู้ว่าติดใคร
+     */
+    {
+      type: 'text',
+      text: `จ่ายโดย ${shorten(detail.payerName, MAX_NAME)}`,
+      size: 'sm',
+      color: '#555555',
+    },
     {
       type: 'box',
       layout: 'horizontal',
@@ -576,22 +596,49 @@ export function billDetailCardMessage(detail: {
       layout: 'vertical',
       spacing: 'sm',
       margin: 'md',
-      // ป้ายคนจ่ายอยู่ในชื่อ ไม่ใช่คอลัมน์แยก — ยอดรายคนอ่านไม่รู้เรื่องถ้าไม่รู้
-      // ว่าใครออกเงินไปก่อน และคอลัมน์ที่ว่างเกือบทุกแถวคือน้ำหนักที่ไม่ได้ใช้
-      contents: detail.lines.map((line) =>
-        row(`${shorten(line.name, MAX_NAME)}${line.isPayer ? ' (จ่าย)' : ''}`, line.amountSatang),
-      ),
+      contents: detail.lines.map((line) => row(shorten(line.name, MAX_NAME), line.amountSatang)),
     },
   ]
 
-  return [
-    {
-      type: 'flex',
-      altText: `${shorten(detail.description, MAX_NAME)} · ${detail.date} · ${baht(detail.totalSatang)}`,
-      contents: {
-        type: 'bubble',
-        body: { type: 'box', layout: 'vertical', contents },
-      },
+  const bubble: LineFlexMessage = {
+    type: 'flex',
+    altText: `${shorten(detail.description, MAX_NAME)} · ${detail.date} · ${baht(detail.totalSatang)}`,
+    contents: {
+      type: 'bubble',
+      body: { type: 'box', layout: 'vertical', contents },
     },
-  ]
+  }
+  if (Buffer.byteLength(JSON.stringify(bubble), 'utf8') <= MAX_BUBBLE_BYTES) return [bubble]
+
+  /**
+   * บิลที่หารกันทั้งวงใหญ่ทะลุเพดาน bubble ได้ — ทางลงเดียวกับการ์ด `ยอด` (D44)
+   *
+   * ไม่มีทางลงแปลว่า LINE ปฏิเสธทั้งก้อน แล้วการกดแถวจะดูเหมือนไม่เกิดอะไรขึ้นเลย
+   * ซึ่งอ่านออกได้อย่างเดียวว่าบอทพัง
+   */
+  const chunks: string[] = []
+  let current = `${shorten(detail.description, MAX_NAME)} · ${detail.date} · ${baht(detail.totalSatang)}`
+
+  const push = (line: string): void => {
+    if (current.length + line.length + 1 > MAX_TEXT) {
+      chunks.push(current)
+      current = line
+    } else {
+      current = current + LF + line
+    }
+  }
+
+  push(`จ่ายโดย ${shorten(detail.payerName, MAX_NAME)}`)
+  push('')
+  for (const line of detail.lines) {
+    push(`  ${shorten(line.name, MAX_NAME)} ${baht(line.amountSatang)}`)
+  }
+  chunks.push(current)
+
+  if (chunks.length > MAX_MESSAGES) {
+    const kept = chunks.slice(0, MAX_MESSAGES - 1)
+    kept.push(`ยังมีต่ออีก ${chunks.length - kept.length} ส่วนที่ยาวเกินกว่าจะส่งในครั้งเดียว`)
+    return kept.map((text) => ({ type: 'text', text }))
+  }
+  return chunks.map((text) => ({ type: 'text', text }))
 }

@@ -9,6 +9,7 @@
  */
 
 import { computeDebts } from '@/lib/debt'
+import { addSurcharge } from '@/lib/split'
 import { buildBalance, type BalanceView } from '@/lib/flow/balance'
 import type { BillDetailInput, BillListInput } from '@/lib/flow/bills'
 import type { GroupView } from '@/lib/line/webhook'
@@ -101,6 +102,9 @@ export async function loadBalance(
  */
 const BILL_LIST_LIMIT = 20
 
+/** ชื่อที่ใช้เมื่อ Member ถูกลบไปแล้ว — ไม่ควรเกิด แต่ id ดิบไม่ควรหลุดออกไปในแชท */
+const UNKNOWN_NAME = '(ไม่ทราบชื่อ)'
+
 /**
  * บิลล่าสุดของวงพร้อมจำนวนทั้งหมด — `'no-bills'` เมื่อยังไม่เคยจดสักใบ
  *
@@ -126,9 +130,26 @@ export async function loadBillList(
       id: expense.id,
       description: expense.description,
       spentAt: expense.spentAt,
-      totalSatang: expense.totalSatang,
+      /**
+       * **ยอดหลังบวก surcharge** ไม่ใช่ค่าดิบในคอลัมน์ซึ่งเป็นยอดก่อนบวก
+       *
+       * `loadBillDetail` โชว์ผลรวมรายคนซึ่งรวม surcharge แล้ว · ปล่อยให้สองที่
+       * คิดคนละทางแปลว่าคนกดแถวที่เขียนว่า ฿1,000 จะเจอการ์ดที่เขียนว่า ฿1,100
+       * · Phase 1 ยังตั้ง `surchargePct: 0` เสมอ แต่สคีมากับ `commitExpense`
+       * รับ 0–100 อยู่แล้ว ความไม่ตรงจะโผล่วันแรกที่มีคนเขียนค่าที่ไม่ใช่ศูนย์
+       *
+       * `addSurcharge` เป็นตัวเดียวกับที่ `splitExpense` ใช้ตอนลง ledger — ไม่ใช่
+       * สูตรที่สอง
+       */
+      totalSatang: addSurcharge(expense.totalSatang, expense.surchargePct),
     })),
-    totalCount: await countExpenses(group.id),
+    /**
+     * **ยิง query นับเฉพาะตอนที่ชนเพดาน** — ได้แถวไม่ครบ 20 แปลว่าไม่มีอะไรถูกตัด
+     * และจำนวนทั้งหมดคือจำนวนที่ถืออยู่ในมือแล้ว · วงส่วนใหญ่มีบิลไม่ถึง 20 ใบ
+     * การนับทุกครั้งจึงเป็น round trip ที่พิสูจน์ได้ว่าไม่ให้อะไรเลย
+     */
+    totalCount:
+      expenses.length < BILL_LIST_LIMIT ? expenses.length : await countExpenses(group.id),
   }
 }
 
@@ -164,7 +185,7 @@ export async function loadBillDetail(input: {
   const names = new Map(members.map((member) => [member.id, member.displayName]))
 
   const lines = detail.shares.map((share) => ({
-    name: names.get(share.memberId) ?? '(ไม่ทราบชื่อ)',
+    name: names.get(share.memberId) ?? UNKNOWN_NAME,
     amountSatang: share.amountSatang,
     isPayer: share.memberId === detail.expense.payerMemberId,
   }))
@@ -185,16 +206,13 @@ export async function loadBillDetail(input: {
     description: detail.expense.description,
     spentAt: detail.expense.spentAt,
     /**
-     * **ยอดที่โชว์คือผลรวมรายคน ไม่ใช่คอลัมน์ยอดบิล**
+     * **ชื่อคนจ่ายมาแยก ไม่ใช่ให้การ์ดหาเอาจาก `isPayer` ของแถว**
      *
-     * คอลัมน์นั้นเก็บยอด**ก่อน**บวก surcharge · invariant ที่ `0001_init.sql`
-     * เขียนกำกับตาราง `expense_share` ไว้บังคับให้ผลรวมรายคนเท่ากับเงินที่จ่ายจริง
-     * หลังบวก surcharge แล้ว — จึงเป็นตัวเดียวที่คนอ่านการ์ดบวกเองแล้วได้ตรง
-     *
-     * บวกที่นี่ไม่ใช่ใน SQL ตาม D25 · การคิดเลขเงินฝั่ง SQL คือสูตรที่สองที่จะแตก
-     * วันที่มีคนแก้ข้างเดียว และ `contract.db.test.ts` เฝ้าไว้อยู่
+     * ระบุชื่อคนในบิลแล้วคนจ่ายไม่ร่วมหาร (D43) เขาจึงไม่มีแถวใน `expense_share`
+     * เลยในรูปแบบที่คนใช้บ่อยที่สุด — `+ ข้าว 1200 กอล์ฟ ตูน` · การ์ดที่พึ่งป้าย
+     * บนแถวจะไม่บอกว่าใครออกเงินพอดีในกรณีนั้น
      */
-    totalSatang: lines.reduce((sum, line) => sum + line.amountSatang, 0),
+    payerName: names.get(detail.expense.payerMemberId) ?? UNKNOWN_NAME,
     lines,
   }
 }
