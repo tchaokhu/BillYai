@@ -6,7 +6,7 @@
  * เพิ่มคำสั่งเข้ารายการนั้นเมื่อไหร่ เทสต์จะแดงจนกว่าไกด์จะพูดถึงมัน
  */
 
-import { IMPLEMENTED_COMMANDS, type ReplyPlan } from '../flow/dispatch'
+import { IMPLEMENTED_COMMANDS, type ReplyPlan, type Surface } from '../flow/dispatch'
 import { formatSatang } from '../money'
 import type { BotCommand } from '../types'
 import type { LineFlexMessage } from './flex'
@@ -36,26 +36,45 @@ const COMMAND_HELP: ReadonlyArray<{ command: BotCommand; line: string }> = [
   { command: 'undo', line: 'เลิก — ยกเลิกคำสั่งล่าสุดของตัวเอง' },
 ]
 
+/** ชื่อที่คนพิมพ์เวลาเรียกบอทในกลุ่ม — ใช้ในไกด์เท่านั้น ไม่ใช่ตัวตัดสินว่าถูกเรียก */
+const MENTION = '@บิลใหญ่'
+
 /**
- * ไกด์ — สอนเฉพาะของที่ใช้ได้จริงในเฟสนี้
+ * ไกด์ — สอนเฉพาะของที่ใช้ได้จริงในเฟสนี้ **และในที่ที่คนอ่านอยู่**
  *
  * สอนไวยากรณ์ที่ยังใช้ไม่ได้คือการหลอกให้คนพิมพ์แล้วโดนปฏิเสธ ซึ่งแย่กว่าบอกตรงๆ
  * ว่ายังไม่พร้อม · ท่อนคำสั่งโตเองตาม `IMPLEMENTED_COMMANDS`
+ *
+ * **ท่อนคำสั่งต่างกันตาม surface ตั้งแต่ D47** — ในกลุ่มคีย์เวิร์ดเปล่าๆ ตกเป็น
+ * ความเงียบ ไกด์ที่สอนรูปเปล่าจึงหลอกให้คนคิดว่าบอทพัง · ส่วนใน 1:1 จะใส่
+ * `@บิลใหญ่` ให้ไม่ได้เลย เพราะ LINE ไม่มี mention ที่นั่น ข้อความจะไม่ถูกตัด
+ * แล้วตกเป็น `unparsed` ซึ่งใน 1:1 ตอบไกด์ = วนกลับมาที่เดิมไม่รู้จบ
+ *
+ * **ท่อนจดบิลเหมือนกันทั้งสองที่** — `+` ไม่ถูก D47 แตะ (D19)
  */
-const GUIDE = [
-  'บิลใหญ่ช่วยจดว่าใครจ่ายอะไรไปเท่าไหร่ แล้วคำนวณให้ว่าใครติดใครเท่าไหร่',
-  '',
-  'จดบิลด้วยการพิมพ์:',
-  '  + ข้าว 1200 กอล์ฟ ตูน',
-  '  + คอนโด 8000 กอล์ฟx2 เบียร์ ตูน',
-  '  + เหล้า 900 กอล์ฟ ตูน รวมฉัน',
-  '  + ข้าว 1200 #เชียงใหม่',
-  '',
-  'ยอดที่พิมพ์คือยอดสุดท้ายที่จ่ายจริง รวมค่าบริการและ VAT แล้ว',
-  ...COMMAND_HELP.filter((help) => IMPLEMENTED_COMMANDS.has(help.command)).map(
-    (help) => `  ${help.line}`,
-  ),
-].join('\n')
+function buildGuide(surface: Surface): string {
+  const prefix = surface === 'group' ? `${MENTION} ` : ''
+  return [
+    'บิลใหญ่ช่วยจดว่าใครจ่ายอะไรไปเท่าไหร่ แล้วคำนวณให้ว่าใครติดใครเท่าไหร่',
+    '',
+    'จดบิลด้วยการพิมพ์:',
+    '  + ข้าว 1200 กอล์ฟ ตูน',
+    '  + คอนโด 8000 กอล์ฟx2 เบียร์ ตูน',
+    '  + เหล้า 900 กอล์ฟ ตูน รวมฉัน',
+    '  + ข้าว 1200 #เชียงใหม่',
+    '',
+    'ยอดที่พิมพ์คือยอดสุดท้ายที่จ่ายจริง รวมค่าบริการและ VAT แล้ว',
+    ...COMMAND_HELP.filter((help) => IMPLEMENTED_COMMANDS.has(help.command)).map(
+      (help) => `  ${prefix}${help.line}`,
+    ),
+  ].join('\n')
+}
+
+/** คิดครั้งเดียวตอนโหลด — เนื้อไกด์เป็นค่าคงที่ของแต่ละ surface */
+const GUIDE: Readonly<Record<Surface, string>> = {
+  group: buildGuide('group'),
+  direct: buildGuide('direct'),
+}
 
 /**
  * `draft` กับ `balance` ไม่มีที่นี่โดยตั้งใจ — ทั้งคู่ต้องอ่าน DB ก่อนถึงจะรู้ว่า
@@ -63,13 +82,19 @@ const GUIDE = [
  */
 export function renderReply(
   plan: Exclude<ReplyPlan, { kind: 'draft' } | { kind: 'balance' }>,
+  /**
+   * **บังคับส่ง ไม่มีค่าเริ่มต้น** — ไกด์เป็นข้อความเดียวที่ต่างกันตามที่ที่คนอ่าน
+   * และค่าเริ่มต้นจะทำให้จุดเรียกที่ลืมส่งกลายเป็นไกด์ที่ผิดที่แบบเงียบๆ
+   * ให้ตัว compiler ทวงดีกว่ารอไปเจอในแชทจริง
+   */
+  surface: Surface,
 ): LineTextMessage[] {
   switch (plan.kind) {
     case 'silent':
       // ไม่ส่งอะไรเลย — ต่างจากส่งข้อความว่าง ซึ่ง LINE จะปฏิเสธ
       return []
     case 'guide':
-      return text(GUIDE)
+      return text(GUIDE[surface])
     case 'need-names':
       // ไวยากรณ์แปลว่า "หารเท่าทุกคนใน Roster" — วงนี้ยังไม่รู้จักใครเลยสักคน
       return text(
