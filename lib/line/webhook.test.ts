@@ -90,6 +90,27 @@ function directText(text: string, replyToken = 'token-1'): unknown {
   }
 }
 
+/**
+ * ข้อความในกลุ่มที่ **เรียกบอทตรงๆ** — คีย์เวิร์ดในกลุ่มต้องมาแบบนี้ตั้งแต่ D47
+ *
+ * `isSelf` เป็นของที่ LINE ตัดสินให้ ไม่ใช่การเทียบชื่อในข้อความ · ความยาว 8
+ * คือ `@บิลใหญ่` พอดี ซึ่ง adapter จะตัดออกก่อนส่งเข้า parser
+ */
+function groupCommand(text: string, replyToken = 'token-1'): unknown {
+  return {
+    type: 'message',
+    replyToken,
+    timestamp: 1_787_000_000_000,
+    source: { type: 'group', groupId: GROUP_ID, userId: USER_ID },
+    message: {
+      id: '1',
+      type: 'text',
+      text: `@บิลใหญ่ ${text}`,
+      mention: { mentionees: [{ index: 0, length: 8, isSelf: true }] },
+    },
+  }
+}
+
 function postback(data: string, replyToken = 'token-1'): unknown {
   return {
     type: 'postback',
@@ -172,7 +193,7 @@ describe('handleLineWebhook — กฎเงียบของกลุ่ม', 
 
 describe('handleLineWebhook — ตอบเมื่อถูกเรียก', () => {
   it('คำสั่งที่ยังไม่เปิดใช้ได้คำตอบ ไม่ใช่ความเงียบ', async () => {
-    const { calls } = await run([groupText('ทวง')])
+    const { calls } = await run([groupCommand('ทวง')])
     expect(calls).toHaveLength(1)
     expect(calls[0]?.replyToken).toBe('token-1')
     expect(firstText(calls[0]?.messages ?? [])).toContain('ยังไม่เปิดใช้')
@@ -270,26 +291,26 @@ describe('handleLineWebhook — ตอบเมื่อถูกเรียก
 
 describe('handleLineWebhook — หลาย event ในชุดเดียว', () => {
   it('ตอบทีละ event ด้วย replyToken ของตัวเอง', async () => {
-    const { calls } = await run([groupText('ยอด', 'token-a'), groupText('ทวง', 'token-b')])
+    const { calls } = await run([groupCommand('ยอด', 'token-a'), groupCommand('ทวง', 'token-b')])
     expect(calls.map((c) => c.replyToken)).toEqual(['token-a', 'token-b'])
   })
 
   it('event ที่พังไม่ทำให้อันที่เหลือไม่ถูกตอบ', async () => {
     const broken = { type: 'message', message: { type: 'text', text: 'ยอด' } }
-    const { calls } = await run([broken, groupText('ยอด', 'token-b'), null])
+    const { calls } = await run([broken, groupCommand('ยอด', 'token-b'), null])
     expect(calls.map((c) => c.replyToken)).toEqual(['token-b'])
   })
 })
 
 describe('handleLineWebhook — reply พังแล้วยังต้อง 200 (D36)', () => {
   it('ยิงไม่ออกก็ยัง 200 พร้อมบอกสาเหตุกลับไปให้ผู้เรียก log', async () => {
-    const { result } = await run([groupText('ยอด')], { ok: false, reason: 'invalid-reply-token' })
+    const { result } = await run([groupCommand('ยอด')], { ok: false, reason: 'invalid-reply-token' })
     expect(result.status).toBe(200)
     expect(result.replyFailures).toEqual(['invalid-reply-token'])
   })
 
   it('reply throw ก็ยัง 200 ไม่ปล่อยให้หลุดออกไป', async () => {
-    const body = JSON.stringify({ events: [groupText('ยอด')] })
+    const body = JSON.stringify({ events: [groupCommand('ยอด')] })
     const reply = vi.fn(async () => {
       throw new Error('เน็ตหลุด')
     })
@@ -302,7 +323,7 @@ describe('handleLineWebhook — reply พังแล้วยังต้อง
   })
 
   it('สำเร็จหมดก็ไม่มีสาเหตุอะไรค้าง', async () => {
-    const { result } = await run([groupText('ยอด')])
+    const { result } = await run([groupCommand('ยอด')])
     expect(result.replyFailures).toEqual([])
   })
 })
@@ -468,7 +489,7 @@ describe('handleLineWebhook — DB ล่มตอนยังไม่ได้
 
   it('event ที่เตรียมสำเร็จยังได้รับคำตอบ ถึงเพื่อนร่วมชุดจะพัง', async () => {
     const body = JSON.stringify({
-      events: [groupText('ยอด', 'token-a'), groupText('+ ข้าว 1200 กอล์ฟ', 'token-b')],
+      events: [groupCommand('ยอด', 'token-a'), groupText('+ ข้าว 1200 กอล์ฟ', 'token-b')],
     })
     const fake = fakeReply()
     const res = await handleLineWebhook(
@@ -640,13 +661,13 @@ describe('handleLineWebhook — กดยืนยัน (M6)', () => {
 
 describe('handleLineWebhook — `ยอด` (M7)', () => {
   it('วงที่ยังไม่เคยจดบิลตอบไกด์ ไม่ใช่ตอบว่ายอดเป็นศูนย์', async () => {
-    const { calls, loadBalance } = await run([groupText('ยอด')])
+    const { calls, loadBalance } = await run([groupCommand('ยอด')])
     expect(loadBalance).toHaveBeenCalledWith(GROUP_ID, USER_ID)
     expect(firstText(calls[0]?.messages ?? [])).toContain('บิลใหญ่ช่วยจด')
   })
 
   it('เคลียร์กันหมดแล้วบอกตรงๆ — ไม่ใช่ตอบไกด์ซ้ำ', async () => {
-    const body = JSON.stringify({ events: [groupText('ยอด')] })
+    const body = JSON.stringify({ events: [groupCommand('ยอด')] })
     const fake = fakeReply()
     const db = fakeDb()
     db.loadBalance.mockResolvedValue({ kind: 'settled' })
@@ -658,7 +679,7 @@ describe('handleLineWebhook — `ยอด` (M7)', () => {
   })
 
   it('มีหนี้แล้วได้การ์ดจัดกลุ่มตามเจ้าหนี้', async () => {
-    const body = JSON.stringify({ events: [groupText('ยอด')] })
+    const body = JSON.stringify({ events: [groupCommand('ยอด')] })
     const fake = fakeReply()
     const db = fakeDb()
     db.loadBalance.mockResolvedValue({
@@ -692,7 +713,7 @@ describe('handleLineWebhook — `ยอด` (M7)', () => {
   })
 
   it('`ยอด #tag` ยังไม่เปิดใช้ ไม่แตะ ledger เลย (D34)', async () => {
-    const { calls, loadBalance } = await run([groupText('ยอด #เชียงใหม่')])
+    const { calls, loadBalance } = await run([groupCommand('ยอด #เชียงใหม่')])
     expect(loadBalance).not.toHaveBeenCalled()
     expect(firstText(calls[0]?.messages ?? [])).toContain('ยังไม่เปิดใช้')
   })

@@ -130,37 +130,38 @@ function surfaceOf(event: LineEvent): Surface {
 async function messagesFor(event: LineEvent, deps: LineWebhookDeps): Promise<LineMessage[]> {
   if (event.kind === 'postback') return messagesForPostback(event, deps)
 
+  const surface = surfaceOf(event)
   const { text, mentionsBot } = stripMentions(event.text, event.mentionees)
   const parsed = mentionsBot ? parseAddressedMessage(text) : parseMessage(text)
-  const plan = decideReply({ surface: surfaceOf(event), addressed: mentionsBot }, parsed)
+  const plan = decideReply({ surface, addressed: mentionsBot }, parsed)
 
   if (plan.kind === 'balance') {
     // ด่านเดียวกับเส้นทางจดบิล — ไม่รู้ว่าใครพิมพ์ก็หาวงส่วนตัวของเขาไม่ได้ และการ
     // ยิง query ด้วย id ว่างจะได้ `no-bills` ซึ่งพาไปตอบไกด์แทนที่จะบอกสาเหตุจริง
-    if (event.source.lineUserId === null) return renderReply({ kind: 'unknown-sender' })
+    if (event.source.lineUserId === null) return renderReply({ kind: 'unknown-sender' }, surface)
     const lineGroupId = event.source.kind === 'group' ? event.source.lineGroupId : null
     const view = await deps.loadBalance(lineGroupId, event.source.lineUserId)
     // วงที่ยังไม่เคยจดบิลตอบไกด์ ไม่ใช่ตอบว่ายอดเป็นศูนย์ — คนที่ยังไม่เคยใช้
     // ต้องการวิธีใช้ ไม่ใช่ตัวเลข
-    if (view === 'no-bills') return renderReply({ kind: 'guide' })
-    if (view.kind === 'settled') return renderReply({ kind: 'settled' })
+    if (view === 'no-bills') return renderReply({ kind: 'guide' }, surface)
+    if (view.kind === 'settled') return renderReply({ kind: 'settled' }, surface)
     return balanceCardMessage(view.blocks)
   }
 
-  if (plan.kind !== 'draft') return renderReply(plan)
+  if (plan.kind !== 'draft') return renderReply(plan, surface)
 
   const lineGroupId = event.source.kind === 'group' ? event.source.lineGroupId : null
   const lineUserId = event.source.lineUserId
   if (lineUserId === null) {
     // LINE ไม่ส่ง `userId` มาให้เมื่อคนพิมพ์ยังไม่ยอมรับข้อตกลงการใช้งานบัญชีทางการ
     // · D26 ให้เฉพาะคนพิมพ์กดยืนยันได้ ซึ่งเช็คไม่ได้เลยถ้าไม่รู้ว่าใครพิมพ์
-    return renderReply({ kind: 'unknown-sender' })
+    return renderReply({ kind: 'unknown-sender' }, surface)
   }
 
   // **อ่าน Roster ตอน draft ไม่เขียน** (D28) — ชื่อที่วงยังไม่รู้จักติดป้าย (ใหม่)
   const view = await deps.loadGroupView(lineGroupId, lineUserId)
   const outcome = buildDraft(plan.draft, view.roster, view.payerName)
-  if (outcome.kind === 'need-names') return renderReply({ kind: 'need-names' })
+  if (outcome.kind === 'need-names') return renderReply({ kind: 'need-names' }, surface)
 
   const draftId = await deps.saveDraft({
     lineGroupId,
@@ -193,12 +194,13 @@ async function messagesForPostback(
   event: LineEvent & { kind: 'postback' },
   deps: LineWebhookDeps,
 ): Promise<LineMessage[]> {
+  const surface = surfaceOf(event)
   const parsed = parseConfirmData(event.data)
   // postback ที่ไม่ใช่ของเรา — เงียบ ไม่เดาว่าเป็นอะไร
   if (parsed === null) return []
 
   const lineUserId = event.source.lineUserId
-  if (lineUserId === null) return renderReply({ kind: 'unknown-sender' })
+  if (lineUserId === null) return renderReply({ kind: 'unknown-sender' }, surface)
 
   const lineGroupId = event.source.kind === 'group' ? event.source.lineGroupId : null
 
@@ -224,7 +226,7 @@ async function messagesForPostback(
     // ดึงชื่อ**นอก transaction** — เรียก API ของ LINE ระหว่างถือ lock อยู่คือการผูก
     // อายุ transaction ไว้กับความเร็วของเน็ตคนอื่น
     const displayName = await deps.fetchDisplayName(lineGroupId, lineUserId)
-    if (displayName === null) return renderReply({ kind: 'no-display-name' })
+    if (displayName === null) return renderReply({ kind: 'no-display-name' }, surface)
     outcome = await deps.confirmDraft({
       draftId: parsed.draftId,
       lineUserId,
@@ -238,17 +240,17 @@ async function messagesForPostback(
         kind: 'committed',
         description: outcome.description,
         totalSatang: outcome.totalSatang,
-      })
+      }, surface)
     case 'gone':
-      return renderReply({ kind: 'draft-gone' })
+      return renderReply({ kind: 'draft-gone' }, surface)
     case 'not-yours':
       // **เงียบ** ไม่ตอบว่า "ไม่มีสิทธิ์" — การประกาศแบบนั้นในกลุ่มเพื่อนคือการ
       // ทำให้เสียหน้าโดยไม่จำเป็น (D26)
       return []
     case 'name-taken':
-      return renderReply({ kind: 'name-taken', name: outcome.name })
+      return renderReply({ kind: 'name-taken', name: outcome.name }, surface)
     case 'needs-identity':
-      return renderReply({ kind: 'needs-identity' })
+      return renderReply({ kind: 'needs-identity' }, surface)
   }
 }
 
