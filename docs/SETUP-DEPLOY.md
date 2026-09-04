@@ -155,30 +155,55 @@ Vercel ให้ผูก env var กับ branch ได้ ตั้งเป�
 | `DB_POOL_MAX` | `2` |
 | `PROMPTPAY_KEY` | คีย์ใหม่จากข้อ 2 |
 | `NEXT_PUBLIC_LIFF_ID` | ค่าเดียวกับ production ได้ (ไม่ใช่ secret) · visibility ต้องเป็น `config` |
-| `LINE_CHANNEL_SECRET` | **ยังไม่ต้องใส่** — ดูข้อ 4 |
-| `LINE_CHANNEL_ACCESS_TOKEN` | **ยังไม่ต้องใส่** — ผูกกับ channel เดียวกับ secret ข้างบน |
+| `LINE_CHANNEL_SECRET` | ของ **dev OA** ไม่ใช่ของ production — ดูข้อ 4 |
+| `LINE_CHANNEL_ACCESS_TOKEN` | ของ **dev OA** ผูกกับ channel เดียวกับ secret ข้างบน |
 
-### 4) `LINE_CHANNEL_SECRET` บน Preview ยังไม่ตั้ง เพราะยังไม่มีค่าที่ถูกให้ตั้ง
+### 4) dev OA — Messaging API channel ตัวที่สอง (ทำแล้ว 4 ก.ย. 2026)
 
-secret ของ production ใส่ไม่ได้ด้วยเหตุผลข้อบนสุด · ใส่ค่ามั่วก็ไม่ได้อะไร เพราะ
-`X-Line-Signature` จะไม่ตรงแล้ว `POST /api/line/webhook` ตอบ 401 ทุกครั้ง ซึ่งทดสอบอะไรไม่ได้
+**secret ของ production ห้ามใส่ Preview เด็ดขาด** ด้วยเหตุผลข้อบนสุด: repo เป็น public
+และ Preview env ถูกฉีดเข้า deployment ที่ build จาก PR ทุกอัน · ใส่ค่ามั่วก็ไม่ได้อะไร
+เพราะ `X-Line-Signature` จะไม่ตรงแล้ว `POST /api/line/webhook` ตอบ 401 ทุกครั้ง
 
-ถ้าวันไหนอยากยิง webhook จริงใส่ preview ก่อน merge ทางที่ถูกคือสร้าง **Messaging API
-channel ตัวที่สอง** (OA สำหรับ dev) ใน provider เดียวกัน แล้วเอา secret ของ channel นั้น
-มาใส่ Preview — ชี้ webhook ของมันไปที่ **branch URL ของ `dev`** ซึ่งอยู่กับที่
-(`https://bill-yai-git-dev-<scope>.vercel.app`) ไม่ใช่ URL ต่อ deployment ที่เปลี่ยนทุกครั้ง
+ทางที่ถูกคือ **OA ตัวที่สองสำหรับ dev** ซึ่งตอนนี้มีแล้ว:
 
-ระหว่างที่ยังไม่ตั้ง preview build ไม่พัง — env ทุกตัวถูกอ่านตอน runtime ไม่ใช่ตอน import
-(`getPool()` ใน `lib/db/client.ts`, `loadKey()` ใน `lib/crypto/promptpay.ts`) จงใจเขียนไว้แบบนั้น
+| | production | dev |
+|---|---|---|
+| OA | `บิลใหญ่` | `BillYai(Dev)` |
+| Vercel env | Production | **Preview + branch `dev`** |
+| DB | Supabase project หลัก | project ที่สอง (ข้อ 1) |
+| webhook | โดเมน production | `https://bill-yai-git-dev-<scope>.vercel.app/api/line/webhook` |
 
-> **กับดักที่รออยู่:** preview deployment ถูก **Vercel Deployment Protection** คุ้มอยู่ตั้งแต่ต้น
+**สร้างจาก OA Manager ไม่ใช่จาก Developers Console** — LINE ยกเลิกปุ่มสร้าง Messaging API
+channel ในคอนโซลไปแล้ว ลำดับคือสร้าง OA ก่อนแล้วกด `ใช้งาน Messaging API` จากฝั่ง OA
+(`SETUP-LINE-OA.md` ขั้น 1–6) · **ต้องเลือก provider เดิม** (`billyai-provider`) ไม่งั้น
+LIFF ของ Phase 2 ใช้ใบเดิมไม่ได้ตาม D46 และย้าย channel ข้าม provider ทีหลังไม่ได้
+
+**branch URL อยู่กับที่ ไม่ใช่ URL ต่อ deployment ที่เปลี่ยนทุกครั้ง** — ตั้ง webhook ครั้งเดียว
+แล้วทุก push ขึ้น `dev` มีผลทันทีโดยไม่ต้องแก้ LINE อีก
+
+env ทุกตัวถูกอ่านตอน runtime ไม่ใช่ตอน import (`getPool()` ใน `lib/db/client.ts`,
+`loadKey()` ใน `lib/crypto/promptpay.ts`) จงใจเขียนไว้แบบนั้น — preview จึง build ผ่าน
+แม้ env ยังไม่ครบ **และแปลว่าเพิ่ม env แล้วต้อง Redeploy เสมอ** ค่าผูกกับ deployment
+ตอน deploy ไม่ได้อ่านสดทุก request
+
+> **Deployment Protection ต้องปิดตลอดช่วงที่ dev OA ใช้งาน** — preview ถูกคุ้มอยู่ตั้งแต่ต้น
 > ทุก request ที่ไม่ได้ล็อกอินได้ `302` ไป `https://vercel.com/sso-api?url=…` ไม่ใช่คำตอบของ route
-> (ยืนยันกับ deployment จริงของ `fa0d9fd` แล้ว) · ของดี ไม่ต้องปิดทิ้ง — แต่แปลว่า **LINE จะยิง
-> webhook เข้า preview URL ไม่ได้** มันจะได้หน้า login ไม่ใช่ 200 · วันที่ทำ dev OA ต้องปิด
-> protection เฉพาะ preview หรือใช้ Protection Bypass for Automation ก่อน ไม่งั้นจะนั่งดีบั๊ก
-> ลายเซ็นอยู่นานโดยที่ปัญหาไม่ได้อยู่ตรงนั้นเลย
+> (ยืนยันกับ deployment จริงของ `fa0d9fd` แล้ว) · LINE ยิง webhook เข้าไปแล้วได้หน้า login
+> ไม่ใช่ 200 · ปิดที่ Settings → Deployment Protection → `Vercel Authentication`
 >
-> ผลข้างเคียงอีกข้อ: ตรวจ preview ด้วย `curl` จากข้างนอกไม่ได้ ต้องเปิดในเบราว์เซอร์ที่ล็อกอิน Vercel
+> **นี่คือราคาถาวรของทาง dev OA ไม่ใช่ของชั่วคราวระหว่างทดสอบ** — เปิดกลับเมื่อไหร่ dev OA
+> ตายทันที · สิ่งที่ยังกันอยู่หลังปิด: ลายเซ็น `X-Line-Signature` (`401` ถ้าไม่ตรง) และ
+> DB คนละก้อนกับ production · สิ่งที่หายไป: ใครก็เปิด preview URL ในเบราว์เซอร์ได้
+>
+> ผลพลอยได้: ตรวจ preview ด้วย `curl` จากข้างนอกได้แล้ว — สามบรรทัดนี้แยกสาเหตุได้ก่อน
+> ไปแตะ LINE เลย
+>
+> ```
+> GET  /                  → 200   protection ปิดจริง deployment มีชีวิต
+> GET  /api/line/webhook  → 405   route อยู่ตรงนั้น (โค้ดตอบ 405 เฉพาะ GET)
+> POST /api/line/webhook  → 401   secret ถึง deployment แล้ว (ค่าว่างได้ 500)
+>      + ลายเซ็นมั่ว
+> ```
 
 ### 5) ปิดทางที่เหลือ
 
@@ -346,3 +371,46 @@ branch อื่นได้ preview URL ของตัวเอง `https://<p
 
 `total=` แยก "env หาย" ออกจาก "DB พัง" ได้โดยไม่ต้องเดา — การต่อ Supabase จริงกิน
 เวลาหลักร้อยมิลลิวินาที ส่วน `throw` ตอนอ่าน `process.env` จบใน 1–2 ms
+
+---
+
+## กับดักที่เจอตอนตั้ง dev OA (4 ก.ย. 2026)
+
+ทั้งชุดนี้เจอตอนยิง M8 ใส่ preview ครั้งแรก · อาการที่เห็นจากฝั่ง LINE เหมือนกันหมดอีก
+เช่นเคย — **บอทตอบผิดคน หรือไม่ตอบ**
+
+### บอทสองตัวในกลุ่มเดียวกัน ทำให้ D47 ดูเหมือนพัง
+
+กลุ่มทดสอบมี `บิลใหญ่` ตัว production ค้างอยู่ตอนเชิญ `BillYai(Dev)` เข้าไป · พิมพ์
+`ยอด` เปล่าๆ แล้วมีคำตอบขึ้นมา ซึ่งอ่านได้ว่า D47 ไม่ทำงาน — **แต่คนตอบคือตัว production
+ที่ยังเป็นโค้ดก่อน D47** ส่วน dev เงียบถูกต้องอยู่แล้ว
+
+**คอลัมน์ `Host` ใน Vercel log แยกได้ในบรรทัดเดียว** — `bill-yai.vercel.app` คือ production
+`bill-yai-git-dev-<scope>.vercel.app` คือ preview · ไล่ config ทั้งวันไม่เจอเพราะปัญหา
+ไม่ได้อยู่ใน config
+
+**กฎ: กลุ่มทดสอบของ dev ห้ามมี OA ตัวจริงอยู่** เตะออกก่อนเสมอ
+
+### `Execution Duration` + `External APIs` แยก "เงียบเพราะกฎ" ออกจาก "ตอบไม่ออก"
+
+กางรายละเอียด request ใน Vercel log แล้วดูสองบรรทัดนี้:
+
+| ที่เห็น | แปลว่า |
+|---|---|
+| `~40ms` + `No outgoing requests` | `decideReply` ตัดสินว่าเงียบ **ก่อนแตะ I/O ใดๆ** — กฎเงียบทำงาน ไม่ใช่ความผิดพลาด |
+| หลักร้อย ms + มี outgoing | ไปถึง DB แล้ว · ถ้ายังไม่ตอบให้สงสัย `LINE_CHANNEL_ACCESS_TOKEN` |
+
+`replied=0` อย่างเดียวแยกสองอันนี้ไม่ได้ แต่สองบรรทัดนี้แยกได้โดยไม่ต้องเดาและไม่ต้อง
+เพิ่ม log
+
+### mention ที่พิมพ์เองไม่ใช่ mention
+
+พิมพ์ `@BillYai(Dev) ยอด` ด้วยมือทีละตัวอักษร **LINE ไม่ส่ง `message.mention` มาให้เลย** ·
+ตาเรามองเหมือนกันเป๊ะกับตอนเลือกจากรายการ แต่ `mentionsBot` เป็น `false` แล้วกฎเงียบ
+ทำงานถูกต้องตาม D47 — ซึ่งอ่านจากในแชทได้ว่าบอทพัง
+
+**ตอนทดสอบต้องกด `@` แล้วแตะชื่อจากรายการที่เด้งขึ้นมา** · ตัวเช็กก่อนส่ง: ชื่อในช่องพิมพ์
+ต้องลบทีเดียวหายทั้งก้อน ถ้าหายทีละตัวอักษรแปลว่ายังเป็นข้อความธรรมดา
+
+ผลข้างเคียงที่ตามมาจริง: `lib/line/messages.ts` ฝัง `@บิลใหญ่` ไว้คงที่ ไกด์ในกลุ่ม dev
+จึงบอกชื่อที่ไม่ตรงกับบอทที่เห็น — **ไม่ใช่บั๊ก** บน production ชื่อตรง
