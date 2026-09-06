@@ -43,6 +43,8 @@ type FlexBox = {
   contents: FlexComponent[]
   spacing?: 'sm' | 'md'
   margin?: 'sm' | 'md' | 'lg'
+  /** สัดส่วนความกว้างเมื่อกล่องนี้เป็นลูกของกล่องแนวนอน — เกณฑ์เดียวกับ `FlexText` */
+  flex?: number
   /** ทั้งกล่องกดได้ — ใช้กับแถวในรายการ `บิล` ซึ่งเป็นทางเดียวไปหารายละเอียด */
   action?: FlexPostbackAction
 }
@@ -234,6 +236,13 @@ function baht(satang: number): string {
 const MAX_NAME = 24
 
 /**
+ * ชื่อคนกินต่อหนึ่งรายการ — ยาวกว่าชื่อคนเดี่ยวเพราะเป็นหลายชื่อต่อกัน
+ *
+ * บิลที่ทุกคนกินร่วมกันจะมีชื่อครบวงในบรรทัดเดียว การ์ดจึงต้องมีเพดานของมันเอง
+ */
+const MAX_EATERS = 60
+
+/**
  * เพดาน JSON ของ bubble หนึ่งใบตามเอกสาร LINE คือ 10 KB — เผื่อไว้หน่อย
  *
  * ทะลุเมื่อไหร่ LINE ปฏิเสธทั้งข้อความ แล้วคนพิมพ์ `ยอด` จะไม่เห็นอะไรเลย ซึ่ง
@@ -267,6 +276,39 @@ function row(name: string, amountSatang: number): FlexBox {
     layout: 'horizontal',
     contents: [
       { type: 'text', text: name, size: 'sm', wrap: true, flex: 3 },
+      { type: 'text', text: baht(amountSatang), size: 'sm', align: 'end', flex: 2 },
+    ],
+  }
+}
+
+/**
+ * แถวของรายการรายชิ้น — ชื่อรายการ ชื่อคนกิน แล้วราคา
+ *
+ * **ชื่อคนกินอยู่ในแถวเดียวกัน ไม่ใช่บรรทัดใหม่** เพราะจำนวนแถวคือสิ่งที่ผลัก
+ * การ์ดเข้าหาเพดาน bubble และใบเสร็จร้านอาหารมีรายการได้หลายสิบชิ้น
+ *
+ * ยาวเกินก็ตัด — `wrap` ทำให้แถวสูงขึ้นแทนที่จะดันราคาตกขอบ
+ */
+function itemRow(name: string, eaterNames: readonly string[], amountSatang: number): FlexBox {
+  return {
+    type: 'box',
+    layout: 'horizontal',
+    contents: [
+      {
+        type: 'box',
+        layout: 'vertical',
+        flex: 3,
+        contents: [
+          { type: 'text', text: name, size: 'sm', wrap: true },
+          {
+            type: 'text',
+            text: shorten(eaterNames.join(', '), MAX_EATERS),
+            size: 'sm',
+            color: '#8c8c8c',
+            wrap: true,
+          },
+        ],
+      },
       { type: 'text', text: baht(amountSatang), size: 'sm', align: 'end', flex: 2 },
     ],
   }
@@ -564,6 +606,13 @@ export function billDetailCardMessage(detail: {
   payerName: string
   totalSatang: number
   lines: readonly { name: string; amountSatang: number; isPayer: boolean }[]
+  /**
+   * รายการรายชิ้น — **ว่างแปลว่าบิลนี้ไม่มี ไม่ใช่ว่าข้อมูลหาย** (D51)
+   *
+   * บิลที่หารเท่าไม่มี Item เลย และบิลที่จดแบบยุบตามชุดคนกินก็จะไม่มีวันมี ·
+   * ส่วนนี้จึงหายไปทั้งก้อนเมื่อว่าง ไม่มีบรรทัดไหนบอกว่า "ไม่มีรายการ"
+   */
+  items?: readonly { name: string; amountSatang: number; eaterNames: readonly string[] }[]
 }): LineMessage[] {
   const contents: FlexComponent[] = [
     { type: 'text', text: shorten(detail.description, MAX_DESCRIPTION), size: 'lg', weight: 'bold', wrap: true },
@@ -591,14 +640,35 @@ export function billDetailCardMessage(detail: {
       ],
     },
     { type: 'separator', margin: 'md' },
-    {
+  ]
+
+  /**
+   * รายการมาก่อนรายคน — **สองส่วนตอบคนละคำถาม** (D51)
+   *
+   * รายการตอบ "ใครกินอะไร" ซึ่งเป็นสิ่งที่คนเปิดบิลเก่าขึ้นมาดูอยากรู้ · รายคน
+   * ตอบ "ฉันติดเท่าไหร่" ซึ่งเป็นตัวเลขที่เอาไปจ่ายจริง · ตัดอันไหนทิ้งก็เหลือ
+   * การ์ดที่ตอบได้ครึ่งเดียว
+   */
+  if (detail.items !== undefined && detail.items.length > 0) {
+    contents.push({
       type: 'box',
       layout: 'vertical',
       spacing: 'sm',
       margin: 'md',
-      contents: detail.lines.map((line) => row(shorten(line.name, MAX_NAME), line.amountSatang)),
-    },
-  ]
+      contents: detail.items.map((item) =>
+        itemRow(shorten(item.name, MAX_NAME), item.eaterNames, item.amountSatang),
+      ),
+    })
+    contents.push({ type: 'separator', margin: 'md' })
+  }
+
+  contents.push({
+    type: 'box',
+    layout: 'vertical',
+    spacing: 'sm',
+    margin: 'md',
+    contents: detail.lines.map((line) => row(shorten(line.name, MAX_NAME), line.amountSatang)),
+  })
 
   const bubble: LineFlexMessage = {
     type: 'flex',
@@ -630,6 +700,14 @@ export function billDetailCardMessage(detail: {
 
   push(`จ่ายโดย ${shorten(detail.payerName, MAX_NAME)}`)
   push('')
+  // รายการมาก่อนรายคนเหมือนบนการ์ด — ลดรูปแล้วต้องอ่านได้เรื่องเดียวกัน
+  for (const item of detail.items ?? []) {
+    push(
+      `  ${shorten(item.name, MAX_NAME)} ${baht(item.amountSatang)}` +
+        `  (${shorten(item.eaterNames.join(', '), MAX_EATERS)})`,
+    )
+  }
+  if (detail.items !== undefined && detail.items.length > 0) push('')
   for (const line of detail.lines) {
     push(`  ${shorten(line.name, MAX_NAME)} ${baht(line.amountSatang)}`)
   }

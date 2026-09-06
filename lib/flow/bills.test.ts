@@ -58,6 +58,31 @@ describe('buildBillList — รายการบิล (D45)', () => {
 })
 
 describe('buildBillDetail — บิลใบเดียว', () => {
+  it('ส่งรายการรายชิ้นต่อให้การ์ด — ไม่ใช่แค่ยอดรายคน (D51)', () => {
+    const view = buildBillDetail({
+      description: 'soul bingsu',
+      spentAt: '2026-09-05',
+      payerName: 'aek',
+      lines: [{ name: 'aek', amountSatang: 45200, isPayer: true }],
+      items: [{ name: 'บิงซู', amountSatang: 22000, eaterNames: ['aek', 'dear'] }],
+    })
+    expect(view.items).toEqual([
+      { name: 'บิงซู', amountSatang: 22000, eaterNames: ['aek', 'dear'] },
+    ])
+  })
+
+  it('บิลที่ไม่มีรายการได้ลิสต์ว่าง ไม่ใช่ undefined — การ์ดจะได้ไม่ต้องเดา', () => {
+    const view = buildBillDetail({
+      description: 'ข้าว',
+      spentAt: '2026-09-05',
+      payerName: 'aek',
+      lines: [{ name: 'aek', amountSatang: 1000, isPayer: true }],
+      items: [],
+    })
+    expect(view.items).toEqual([])
+  })
+
+
   it('ชื่อ วันที่ ยอดรวม และรายคนพร้อมป้ายคนจ่าย', () => {
     expect(
       buildBillDetail({
@@ -69,6 +94,7 @@ describe('buildBillDetail — บิลใบเดียว', () => {
           { name: 'เดียร์', amountSatang: 30000, isPayer: false },
           { name: 'เกม', amountSatang: 30000, isPayer: false },
         ],
+        items: [],
       }),
     ).toEqual({
       description: 'ตี๋น้อย',
@@ -80,6 +106,7 @@ describe('buildBillDetail — บิลใบเดียว', () => {
         { name: 'เดียร์', amountSatang: 30000, isPayer: false },
         { name: 'เกม', amountSatang: 30000, isPayer: false },
       ],
+      items: [],
     })
   })
 
@@ -93,6 +120,7 @@ describe('buildBillDetail — บิลใบเดียว', () => {
         { name: 'นัท', amountSatang: 15001, isPayer: true },
         { name: 'กอล์ฟ', amountSatang: 15000, isPayer: false },
       ],
+      items: [],
     })
     expect(detail.totalSatang).toBe(30001)
     expect(detail.lines.reduce((sum, line) => sum + line.amountSatang, 0)).toBe(30001)
@@ -112,6 +140,7 @@ describe('buildBillDetail — คนจ่ายที่ไม่ได้ร�
         { name: 'กอล์ฟ', amountSatang: 60000, isPayer: false },
         { name: 'ตูน', amountSatang: 60000, isPayer: false },
       ],
+      items: [],
     })
     expect(detail.payerName).toBe('นัท')
     expect(detail.totalSatang).toBe(120000)
@@ -126,6 +155,7 @@ describe('buildBillDetail — คนจ่ายที่ไม่ได้ร�
         { name: 'นัท', amountSatang: 15001, isPayer: true },
         { name: 'กอล์ฟ', amountSatang: 15000, isPayer: false },
       ],
+      items: [],
     })
     expect(detail.totalSatang).toBe(30001)
   })

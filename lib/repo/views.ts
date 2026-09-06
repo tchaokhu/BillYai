@@ -202,6 +202,20 @@ export async function loadBillDetail(input: {
     return a.name < b.name ? -1 : a.name > b.name ? 1 : 0
   })
 
+  /**
+   * **ลำดับมาจาก `findExpenseById`** — ชิ้นแพงสุดก่อน ตัดสินเสมอด้วย id
+   *
+   * ส่วนชื่อคนกินเรียงตามลำดับใน Roster ที่อ่านมา ไม่ใช่ตาม uuid ของ member
+   * ด้วยเหตุผลเดียวกับที่แถวรายคนต้องเรียง: คนอ่านเดาลำดับของ uuid ไม่ได้
+   */
+  const items = detail.items.map(({ item, shares }) => ({
+    name: item.name,
+    amountSatang: item.amountSatang,
+    eaterNames: members
+      .filter((member) => shares.some((share) => share.memberId === member.id))
+      .map((member) => member.displayName),
+  }))
+
   return {
     description: detail.expense.description,
     spentAt: detail.expense.spentAt,
@@ -214,5 +228,6 @@ export async function loadBillDetail(input: {
      */
     payerName: names.get(detail.expense.payerMemberId) ?? UNKNOWN_NAME,
     lines,
+    items,
   }
 }
