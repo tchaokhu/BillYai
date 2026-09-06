@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { readAccessToken, readChannelSecret } from './env'
+import { readAccessToken, readChannelSecret, readLoginChannelId } from './env'
 
 const REAL = 'a1b2c3d4e5f60718293a4b5c6d7e8f90'
 
@@ -48,5 +48,29 @@ describe('readAccessToken — ค่าที่คนก๊อปวางจ�
     expect(readAccessToken(undefined)).toEqual({ token: '', hadSurroundingWhitespace: false })
     expect(readAccessToken(null)).toEqual({ token: '', hadSurroundingWhitespace: false })
     expect(readAccessToken('   ')).toEqual({ token: '', hadSurroundingWhitespace: false })
+  })
+})
+
+describe('readLoginChannelId', () => {
+  it('ตัดช่องว่างที่ติดมาตอนวาง เหมือน secret กับ token', () => {
+    expect(readLoginChannelId(` 1234567890${String.fromCharCode(10)}`)).toEqual({
+      channelId: '1234567890',
+      hadSurroundingWhitespace: true,
+    })
+  })
+
+  it('ค่าที่ไม่ใช่ตัวเลขล้วนถือว่าไม่ได้ตั้ง', () => {
+    // **Channel ID เป็นตัวเลขล้วน ส่วน LIFF ID เป็น `<channelId>-<suffix>`** — สอง
+    // ค่านี้อยู่ติดกันในคอนโซลและขึ้นต้นเหมือนกัน วางสลับกันได้ง่ายมาก · ปล่อยผ่าน
+    // แปลว่า `aud` ไม่มีวันตรงแล้วทุกคนถูกปฏิเสธ โดยที่ log บอกแค่ว่า token ใช้ไม่ได้
+    expect(readLoginChannelId('1234567890-AbCdEfGh').channelId).toBe('')
+    expect(readLoginChannelId('ไม่ใช่เลข').channelId).toBe('')
+  })
+
+  it('ยังไม่ได้ตั้งคืนค่าว่าง ไม่ throw', () => {
+    expect(readLoginChannelId(undefined)).toEqual({
+      channelId: '',
+      hadSurroundingWhitespace: false,
+    })
   })
 })

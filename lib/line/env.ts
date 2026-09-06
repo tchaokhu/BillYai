@@ -41,6 +41,29 @@ export function readAccessToken(raw: string | undefined | null): AccessToken {
   return { token: trimmed, hadSurroundingWhitespace }
 }
 
+export interface LoginChannelId {
+  /** ค่าที่เอาไปใช้จริง — ว่างแปลว่ายังไม่ได้ตั้ง หรือตั้งมาผิดรูป */
+  channelId: string
+  hadSurroundingWhitespace: boolean
+}
+
+/**
+ * Channel ID ของ **LINE Login channel** — ตัวที่ ID token ของ LIFF ใช้เป็น `aud`
+ *
+ * **บังคับให้เป็นตัวเลขล้วน** ต่างจาก secret กับ token ที่รับค่าอะไรก็ได้ · เหตุผล
+ * คือค่าที่วางผิดบ่อยที่สุดตรงนี้ไม่ใช่ช่องว่าง แต่คือ **LIFF ID** ซึ่งอยู่คนละแท็บ
+ * ห่างกันสองคลิก ขึ้นต้นด้วยเลขชุดเดียวกันเป๊ะ แล้วมี `-suffix` ต่อท้าย
+ * (`1234567890` กับ `1234567890-AbCdEfGh`)
+ *
+ * ปล่อยผ่านแปลว่า `aud` ไม่มีวันตรง ทุกคนถูกปฏิเสธเหมือนกันหมด และ log บอกได้แค่
+ * "token ใช้ไม่ได้" ซึ่งหน้าตาเหมือน token หมดอายุทุกประการ
+ */
+export function readLoginChannelId(raw: string | undefined | null): LoginChannelId {
+  const { trimmed, hadSurroundingWhitespace } = trimPasted(raw)
+  const valid = /^[0-9]+$/.test(trimmed)
+  return { channelId: valid ? trimmed : '', hadSurroundingWhitespace }
+}
+
 /** ค่าว่างไม่ถือว่าเป็นความผิดเรื่องช่องว่าง — มันคือ "ยังไม่ได้ตั้ง" ซึ่งคนละอาการ */
 function trimPasted(raw: string | undefined | null): {
   trimmed: string
