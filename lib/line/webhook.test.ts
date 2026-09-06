@@ -820,6 +820,7 @@ describe('handleLineWebhook — กดแถวในรายการบิล
       { name: 'นัท', amountSatang: 30000, isPayer: true },
       { name: 'เดียร์', amountSatang: 60000, isPayer: false },
     ],
+    items: [],
   } as const
 
   it('ได้การ์ดรายละเอียดของใบนั้น', async () => {

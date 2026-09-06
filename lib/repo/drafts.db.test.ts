@@ -196,11 +196,24 @@ describe('เก็บกวาดตอนเขียน ไม่ใช่ด
     expect(await findDraft(young.id)).not.toBeNull()
   })
 
+  /**
+   * **ทำใน transaction เดียวทั้งหมด ไม่ใช่บน pool**
+   *
+   * `createDraft` กวาดของหมดอายุ**ทุกแถวทั้งตาราง** ในคำสั่งเดียวกับที่ insert
+   * (นั่นคือทั้งหมดที่ D7 ต้องการ: ไม่มี cron) · ไฟล์เทสต์อื่นที่รันขนานกันจึงชิง
+   * กวาดแถวของเทสต์นี้ไปก่อนได้ แล้ว `sweepExpiredDrafts()` จะคืน 0 แบบสุ่มตาม
+   * จังหวะ — แถวที่เกิดในทรานแซกชันนี้ไม่มีใครนอกทรานแซกชันมองเห็น จึงกวาดไม่ได้
+   */
   it('`sweepExpiredDrafts` คืนจำนวนที่ลบ', async () => {
-    const old = await createDraft(input())
-    await ageDraft(old.id, 48)
-    expect(await sweepExpiredDrafts()).toBeGreaterThanOrEqual(1)
-    expect(await findDraft(old.id)).toBeNull()
+    await withTransaction(async (tx) => {
+      const old = await createDraft(input(), tx)
+      await tx.query(
+        `update expense_draft set created_at = now() - interval '48 hours' where id = $1`,
+        [old.id],
+      )
+      expect(await sweepExpiredDrafts(tx)).toBeGreaterThanOrEqual(1)
+      expect(await findDraft(old.id, tx)).toBeNull()
+    })
   })
 })
 

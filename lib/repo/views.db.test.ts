@@ -8,11 +8,12 @@
 import { randomUUID } from 'node:crypto'
 import { afterAll, describe, expect, it } from 'vitest'
 import { closePool } from '@/lib/db/client'
-import { makeGroup } from '@/lib/db/fixtures'
+import { makeGroup, makeMembers } from '@/lib/db/fixtures'
 import { confirmDraft } from './confirm'
 import { createDraft } from './drafts'
 import { markMemberLeft } from './members'
-import { voidExpense } from './expenses'
+import { commitExpense, voidExpense } from './expenses'
+import { splitExpense } from '@/lib/split'
 import { loadBalance, loadBillDetail, loadBillList, loadGroupView } from './views'
 import type { DraftLine, ExpenseDraft } from '@/lib/types'
 
@@ -264,6 +265,67 @@ describe('loadBillList (D45)', () => {
     const list = await loadBillList(mine, fakeLineUserId())
     if (list === 'no-bills') throw new Error('ต้องมีบิล')
     expect(list.totalCount).toBe(1)
+  })
+})
+
+describe('loadBillDetail — บิล itemized (D51)', () => {
+  /** บิลรายชิ้นเขียนตรงผ่าน `commitExpense` — ไวยากรณ์ในแชทยังสร้าง items ไม่ได้ */
+  async function recordItemized(lineGroupId: string): Promise<string> {
+    const group = await makeGroup(undefined, { lineGroupId })
+    const [aek, dear, game] = await makeMembers(group.id, ['aek', 'dear', 'game'])
+    if (!aek || !dear || !game) throw new Error('fixture')
+
+    const items = [
+      { name: 'บิงซู', amountSatang: 22000, memberIds: [aek.id, dear.id] },
+      { name: 'โทสต์', amountSatang: 14900, memberIds: [game.id] },
+      { name: 'ชาเขียว', amountSatang: 4000, memberIds: [aek.id, dear.id, game.id] },
+    ]
+    const shares = splitExpense({
+      totalSatang: 40900,
+      adjustmentSatang: 4300,
+      payerId: aek.id,
+      mode: 'itemized',
+      participants: [{ memberId: aek.id }, { memberId: dear.id }, { memberId: game.id }],
+      items,
+    })
+    const expense = await commitExpense({
+      groupId: group.id,
+      description: 'soul bingsu',
+      totalSatang: 40900,
+      adjustmentSatang: 4300,
+      payerMemberId: aek.id,
+      splitMode: 'itemized',
+      spentAt: '2026-09-05',
+      createdBy: aek.id,
+      source: 'liff',
+      shares: shares.map((s) => ({ memberId: s.memberId, amountSatang: s.amountSatang })),
+      // `commitExpense` รับคนกินเป็น `shares` ส่วน `splitExpense` รับเป็น `memberIds`
+      items: items.map((item) => ({
+        name: item.name,
+        amountSatang: item.amountSatang,
+        shares: item.memberIds.map((memberId) => ({ memberId })),
+      })),
+    })
+    return expense.id
+  }
+
+  it('คืนรายการรายชิ้นพร้อมชื่อคนกิน ไม่ใช่แค่ยอดรายคน', async () => {
+    const lineGroupId = fakeLineGroupId()
+    const expenseId = await recordItemized(lineGroupId)
+
+    const detail = await loadBillDetail({
+      expenseId,
+      lineGroupId,
+      lineUserId: fakeLineUserId(),
+    })
+    if (detail === 'not-found' || detail === 'voided') throw new Error(detail)
+
+    // เรียงจากชิ้นแพงสุด — ลำดับเดียวกับที่ `findExpenseById` คืนมา
+    expect(detail.items).toEqual([
+      { name: 'บิงซู', amountSatang: 22000, eaterNames: ['aek', 'dear'] },
+      { name: 'โทสต์', amountSatang: 14900, eaterNames: ['game'] },
+      { name: 'ชาเขียว', amountSatang: 4000, eaterNames: ['aek', 'dear', 'game'] },
+    ])
   })
 })
 

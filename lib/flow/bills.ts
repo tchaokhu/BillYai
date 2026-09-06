@@ -81,6 +81,20 @@ export interface BillDetailInput {
    */
   payerName: string
   lines: readonly BillDetailLine[]
+  /**
+   * รายการรายชิ้น — **ว่างได้ และว่างไม่ได้แปลว่าข้อมูลขาด** (D51)
+   *
+   * บิลที่หารเท่าไม่มี Item เลย และบิลที่จดแบบยุบตามชุดคนกิน (§3) จะไม่มีวันมี
+   * การ์ดจึงต้องเงียบเรื่องนี้ไปเลย ห้ามเขียนว่า "ไม่มีรายการ"
+   */
+  items: readonly BillDetailItem[]
+}
+
+export interface BillDetailItem {
+  name: string
+  amountSatang: number
+  /** ชื่อคนที่กินชิ้นนี้ — ว่างไม่ได้ `split.ts` ปฏิเสธรายการที่ไม่มีคนกินอยู่แล้ว */
+  eaterNames: readonly string[]
 }
 
 export interface BillDetailView {
@@ -89,6 +103,8 @@ export interface BillDetailView {
   payerName: string
   totalSatang: number
   lines: BillDetailLine[]
+  /** ว่างได้ — บิลที่ไม่มี Item ไม่ได้ขาดข้อมูล (D51) */
+  items: BillDetailItem[]
 }
 
 /**
@@ -106,7 +122,14 @@ export function buildBillDetail(input: BillDetailInput): BillDetailView {
     description: input.description,
     date: thaiShortDate(input.spentAt),
     payerName: input.payerName,
+    /**
+     * **ผลรวมของแถวรายคน ไม่ใช่ `total_satang` ในตาราง**
+     *
+     * แถวรายคนรวมส่วนปรับไว้แล้ว (D50) ผลบวกจึงเท่ากับยอดที่จ่ายจริงเสมอ
+     * โดยไม่ต้องรู้จักส่วนปรับที่นี่เลย
+     */
     totalSatang: lines.reduce((sum, line) => sum + line.amountSatang, 0),
     lines,
+    items: input.items.map((item) => ({ ...item })),
   }
 }

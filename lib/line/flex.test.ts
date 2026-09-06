@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest'
 import { balanceCardMessage, billDetailCardMessage, billListCardMessage, draftCardMessage } from './flex'
 import type { DraftCard } from '../flow/draft'
 
+/** ตัวคั่นตอนยุบข้อความในการ์ดมาเทียบ — แยกไว้กันบรรทัดจริงหลุดเข้าไปในสตริง */
+const LF = String.fromCharCode(10)
+
 const CARD: DraftCard = {
   description: 'ข้าว',
   totalSatang: 120000,
@@ -405,6 +408,53 @@ describe('billDetailCardMessage — บิลใบเดียว', () => {
       { name: 'เดียร์', amountSatang: 30000, isPayer: false },
     ],
   }
+
+  const ITEMIZED = {
+    ...DETAIL,
+    description: 'soul bingsu',
+    totalSatang: 45200,
+    items: [
+      { name: 'บิงซู', amountSatang: 22000, eaterNames: ['aek', 'dear'] },
+      { name: 'ชาเขียว', amountSatang: 4000, eaterNames: ['aek', 'dear', 'game'] },
+    ],
+  }
+
+  it('บิล itemized โชว์ทั้งรายการและรายคน — คนละคำถามกัน (D51)', () => {
+    const texts = allText(billDetailCardMessage(ITEMIZED)[0]).join(LF)
+    // รายการตอบ "ใครกินอะไร"
+    expect(texts).toContain('บิงซู')
+    expect(texts).toContain('฿220')
+    expect(texts).toContain('aek, dear')
+    // รายคนตอบ "ฉันติดเท่าไหร่" — ต้องยังอยู่ครบ
+    expect(texts).toContain('นัท')
+    expect(texts).toContain('เดียร์')
+  })
+
+  it('บิลที่ยาวจนต้องลดรูปเป็น text ยังขนรายการไปด้วย — ไม่ตัดครึ่งใบทิ้ง', () => {
+    const many = {
+      ...DETAIL,
+      lines: Array.from({ length: 60 }, (_, i) => ({
+        name: `เพื่อนคนที่ ${i} ชื่อยาวพอสมควรจนกินที่`,
+        amountSatang: 1500,
+        isPayer: false,
+      })),
+      items: [
+        { name: 'บิงซูสตรอว์เบอร์รี่', amountSatang: 22000, eaterNames: ['aek', 'dear'] },
+        { name: 'ฮันนี่โทสต์', amountSatang: 14900, eaterNames: ['game'] },
+      ],
+    }
+    const messages = billDetailCardMessage(many)
+    expect(messages[0]?.type).toBe('text')
+    const all = messages.map((m) => (m.type === 'text' ? m.text : '')).join(LF)
+    expect(all).toContain('บิงซูสตรอว์เบอร์รี่')
+    expect(all).toContain('ฮันนี่โทสต์')
+    expect(all).toContain('aek, dear')
+  })
+
+  it('บิลที่ไม่มีรายการเงียบเรื่องรายการไปเลย — ห้ามเขียนว่า "ไม่มีรายการ" (D51)', () => {
+    const texts = allText(billDetailCardMessage({ ...DETAIL, items: [] })[0]).join(LF)
+    expect(texts).not.toContain('รายการ')
+  })
 
   it('โชว์ชื่อบิล วันที่ ยอดรวม และรายคนครบ', () => {
     const texts = allText(billDetailCardMessage(DETAIL)[0]).join('\n')
