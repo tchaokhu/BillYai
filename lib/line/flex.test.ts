@@ -30,6 +30,24 @@ function allText(node: unknown): string[] {
   return [...here, ...Object.values(record).flatMap(allText)]
 }
 
+/** footer ของ bubble ใบแรก — การ์ดเล็กมีใบเดียวอยู่แล้ว */
+function footerOf(message: unknown): unknown {
+  const first = bubblesOf(message)[0]
+  return typeof first === 'object' && first !== null
+    ? (first as { footer?: unknown }).footer
+    : undefined
+}
+
+/** ทุก bubble ในข้อความ ไม่ว่าจะเป็นใบเดี่ยวหรือ carousel */
+function bubblesOf(message: unknown): unknown[] {
+  if (typeof message !== 'object' || message === null) return []
+  const contents = (message as { contents?: unknown }).contents
+  if (typeof contents !== 'object' || contents === null) return []
+  const record = contents as { type?: string; contents?: unknown }
+  if (record.type === 'carousel' && Array.isArray(record.contents)) return record.contents
+  return [contents]
+}
+
 describe('draftCardMessage — สิ่งที่คนต้องเห็นก่อนกด', () => {
   it('เป็น flex message ที่มี altText อ่านรู้เรื่อง', () => {
     const message = draftCardMessage(CARD, DRAFT_ID)
@@ -70,6 +88,35 @@ describe('draftCardMessage — สิ่งที่คนต้องเห็�
   it('**ไม่โชว์วันที่** — คนเพิ่งพิมพ์ไปเมื่อกี้ ไม่มีใครตรวจบรรทัดนั้น', () => {
     const texts = allText(draftCardMessage(CARD, DRAFT_ID))
     expect(texts.some((t) => /\d{4}-\d{2}-\d{2}/.test(t))).toBe(false)
+  })
+})
+
+describe('draftCardMessage — วงที่ใหญ่เกินหนึ่ง bubble (D52)', () => {
+  const BIG: DraftCard = {
+    description: 'ทริปเชียงใหม่',
+    totalSatang: 5_000_00,
+    lines: Array.from({ length: 90 }, (_, i) => ({
+      name: `เพื่อนหมายเลข ${i}`,
+      amountSatang: 5555,
+      isNew: i % 2 === 0,
+      isPayer: false,
+    })),
+  }
+
+  it('กลายเป็น carousel ไม่ใช่การ์ดที่ LINE ปฏิเสธทั้งก้อน', () => {
+    const message = draftCardMessage(BIG, DRAFT_ID)
+    expect(message.contents.type).toBe('carousel')
+
+    // D16 — ชื่อทุกคนที่จะโดนหารต้องอยู่ครบ ไม่ว่าการ์ดจะถูกแบ่งกี่ใบ
+    const texts = allText(message).join(LF)
+    for (const line of BIG.lines) expect(texts).toContain(line.name)
+  })
+
+  it('ทุก bubble มีปุ่มยืนยัน — ปุ่มที่อยู่ใบเดียวคือปุ่มที่เลื่อนผ่านแล้วหาไม่เจอ', () => {
+    const message = draftCardMessage(BIG, DRAFT_ID)
+    for (const bubble of bubblesOf(message)) {
+      expect(findPostbackData(bubble)).toBe(`confirm=${DRAFT_ID}`)
+    }
   })
 })
 
@@ -165,13 +212,13 @@ describe('draftCardMessage — แถวเลือกตัวตน (D29 / AD
   it('คนที่ยืนยันตัวตนแล้วได้ปุ่มยืนยันตามปกติ ไม่มี quick reply', () => {
     const message = draftCardMessage(CARD, DRAFT_ID)
     expect(message.quickReply).toBeUndefined()
-    expect(findPostbackData(message.contents.footer)).toBe(`confirm=${DRAFT_ID}`)
+    expect(findPostbackData(footerOf(message))).toBe(`confirm=${DRAFT_ID}`)
   })
 
   it('คนที่ยังไม่ยืนยันตัวตน — **ไม่มีปุ่มยืนยันบนการ์ด** เพราะกดแล้วไปต่อไม่ได้', () => {
     const message = draftCardMessage(CARD, DRAFT_ID, choices('กอล์ฟ', 'ตูน'))
-    expect(findPostbackData(message.contents.footer)).toBeNull()
-    expect(allText(message.contents.footer).join('')).toContain('เลือกชื่อของคุณ')
+    expect(findPostbackData(footerOf(message))).toBeNull()
+    expect(allText(footerOf(message)).join('')).toContain('เลือกชื่อของคุณ')
   })
 
   it('quick reply มีชื่อที่ยังไม่มีเจ้าของ บวก `ฉันเป็นคนใหม่` ต่อท้ายเสมอ', () => {
@@ -252,7 +299,7 @@ describe('balanceCardMessage — การ์ด `ยอด` (D31)', () => {
   it('ยอดรวมทั้งวงอยู่หัวการ์ดและใน altText', () => {
     const [message] = balanceCardMessage(BLOCKS)
     if (message?.type !== 'flex') throw new Error('วงเล็กต้องได้ Flex')
-    expect(allText(message.contents.body)).toContain('฿1,100')
+    expect(allText(message.contents)).toContain('฿1,100')
     expect(message.altText).toContain('฿1,100')
     expect(message.altText.length).toBeLessThanOrEqual(400)
   })
@@ -284,7 +331,17 @@ describe('balanceCardMessage — การ์ด `ยอด` (D31)', () => {
     }))
     const messages = balanceCardMessage(realistic)
     expect(messages).toHaveLength(1)
-    expect(Buffer.byteLength(JSON.stringify(messages), 'utf8')).toBeLessThan(10_000)
+    expect(messages[0]?.type).toBe('flex')
+
+    /**
+     * **เพดาน 10 KB เป็นของ bubble ใบเดียว ไม่ใช่ของทั้งข้อความ**
+     *
+     * เทสต์นี้เคยวัดทั้งข้อความแล้วผ่าน ทั้งที่ผลลัพธ์ตอนนั้นเป็น text ไม่ใช่ Flex
+     * เลยด้วยซ้ำ — ชื่อเทสต์บอกว่า "ยังเป็น Flex" แต่ไม่มีบรรทัดไหนตรวจ (แก้ D52)
+     */
+    for (const bubble of bubblesOf(messages[0])) {
+      expect(Buffer.byteLength(JSON.stringify(bubble), 'utf8')).toBeLessThan(10_000)
+    }
   })
 
   it('วงที่ใหญ่จน Flex ใส่ไม่ไหว ลดรูปเป็น text — **ไม่ตัดใครทิ้ง** (D31)', () => {
@@ -397,6 +454,27 @@ describe('billListCardMessage — รายการบิล (D45)', () => {
   })
 })
 
+describe('balanceCardMessage — วงที่ใหญ่เกินหนึ่ง bubble (D52)', () => {
+  it('เลื่อนข้างก่อน แล้วค่อยลดรูปเป็น text — ไม่มีใครหายทั้งสองทาง', () => {
+    // 15 บล็อก ≈ 33 KB ยังอยู่ใต้เพดาน carousel · ใหญ่กว่านี้ตกเป็น text ตามเดิม
+    const blocks = Array.from({ length: 15 }, (_, i) => ({
+      creditorName: `เจ้าหนี้คนที่ ${i}`,
+      totalSatang: 10000,
+      rows: Array.from({ length: 8 }, (_, k) => ({
+        debtorName: `ลูกหนี้ ${i}-${k}`,
+        amountSatang: 1250,
+      })),
+    }))
+    const messages = balanceCardMessage(blocks)
+    expect(messages).toHaveLength(1)
+    expect(messages[0]?.type).toBe('flex')
+    expect((messages[0] as { contents: { type: string } }).contents.type).toBe('carousel')
+
+    const texts = allText(messages[0]).join(LF)
+    for (const block of blocks) expect(texts).toContain(block.creditorName)
+  })
+})
+
 describe('billDetailCardMessage — บิลใบเดียว', () => {
   const DETAIL = {
     description: 'ตี๋น้อย',
@@ -430,11 +508,36 @@ describe('billDetailCardMessage — บิลใบเดียว', () => {
     expect(texts).toContain('เดียร์')
   })
 
-  it('บิลที่ยาวจนต้องลดรูปเป็น text ยังขนรายการไปด้วย — ไม่ตัดครึ่งใบทิ้ง', () => {
+  it('บิลที่ยาวเกินหนึ่ง bubble กลายเป็น carousel ไม่ใช่ text (D52)', () => {
     const many = {
       ...DETAIL,
+      // ชื่อสั้นพอที่จะไม่ถูก `shorten` ตัด — เทสต์นี้ตรวจว่าไม่มีใครหาย ไม่ใช่ตรวจการตัดชื่อ
       lines: Array.from({ length: 60 }, (_, i) => ({
-        name: `เพื่อนคนที่ ${i} ชื่อยาวพอสมควรจนกินที่`,
+        name: `เพื่อนหมายเลข ${i}`,
+        amountSatang: 1500,
+        isPayer: false,
+      })),
+      items: [{ name: 'บิงซู', amountSatang: 22000, eaterNames: ['aek', 'dear'] }],
+    }
+    const messages = billDetailCardMessage(many)
+    expect(messages).toHaveLength(1)
+    expect(messages[0]?.type).toBe('flex')
+
+    const contents = (messages[0] as { contents: { type: string } }).contents
+    expect(contents.type).toBe('carousel')
+
+    // **ห้ามตัดใครทิ้ง** — ทุกชื่อต้องยังอยู่ครบ เกณฑ์เดียวกับ D44
+    const texts = allText(messages[0]).join(LF)
+    for (const line of many.lines) expect(texts).toContain(line.name)
+    expect(texts).toContain('บิงซู')
+  })
+
+  it('บิลที่ยาวจนต้องลดรูปเป็น text ยังขนรายการไปด้วย — ไม่ตัดครึ่งใบทิ้ง', () => {
+    // ใหญ่จนแม้แต่ carousel ก็ใส่ไม่ลง — วงขนาดนี้เกินกว่าที่ระบบออกแบบมารับไหว
+    const many = {
+      ...DETAIL,
+      lines: Array.from({ length: 900 }, (_, i) => ({
+        name: `เพื่อนคนที่ ${i} ชื่อยาว`,
         amountSatang: 1500,
         isPayer: false,
       })),
