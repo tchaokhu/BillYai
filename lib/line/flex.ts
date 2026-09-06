@@ -78,6 +78,41 @@ type QuickReplyItem = {
  * **ไม่มี Passive Nag ต่อท้าย** (D32) — ทั้งใบเป็นยอดค้างอยู่แล้ว · โทน Escalation
  * (D33) เป็นของ Phase 2 พร้อม Passive Nag
  */
+/** บล็อกของเจ้าหนี้หนึ่งคน — หัวบล็อกกับแถวลูกหนี้ · ใช้ทั้งใน bubble เดี่ยวและ carousel */
+function creditorBlock(block: BalanceBlock): FlexBox {
+  return {
+    type: 'box',
+    layout: 'vertical',
+    spacing: 'sm',
+    margin: 'md',
+    contents: [
+      {
+        type: 'box',
+        layout: 'horizontal',
+        contents: [
+          {
+            type: 'text',
+            text: `${shorten(block.creditorName, MAX_NAME)} ได้คืน`,
+            size: 'sm',
+            weight: 'bold',
+            wrap: true,
+            flex: 3,
+          },
+          {
+            type: 'text',
+            text: baht(block.totalSatang),
+            size: 'sm',
+            weight: 'bold',
+            align: 'end',
+            flex: 2,
+          },
+        ],
+      },
+      ...block.rows.map((row) => row2(shorten(row.debtorName, MAX_NAME), row.amountSatang)),
+    ],
+  }
+}
+
 function balanceBubble(blocks: readonly BalanceBlock[]): LineFlexMessage {
   const total = blocks.reduce((sum, block) => sum + block.totalSatang, 0)
 
@@ -94,39 +129,7 @@ function balanceBubble(blocks: readonly BalanceBlock[]): LineFlexMessage {
 
   for (const block of blocks) {
     contents.push({ type: 'separator', margin: 'md' })
-    contents.push({
-      type: 'box',
-      layout: 'vertical',
-      spacing: 'sm',
-      margin: 'md',
-      contents: [
-        {
-          type: 'box',
-          layout: 'horizontal',
-          contents: [
-            {
-              type: 'text',
-              text: `${shorten(block.creditorName, MAX_NAME)} ได้คืน`,
-              size: 'sm',
-              weight: 'bold',
-              wrap: true,
-              flex: 3,
-            },
-            {
-              type: 'text',
-              text: baht(block.totalSatang),
-              size: 'sm',
-              weight: 'bold',
-              align: 'end',
-              flex: 2,
-            },
-          ],
-        },
-        ...block.rows.map((row) =>
-          row2(shorten(row.debtorName, MAX_NAME), row.amountSatang),
-        ),
-      ],
-    })
+    contents.push(creditorBlock(block))
   }
 
   return {
@@ -155,7 +158,38 @@ export function balanceCardMessage(blocks: readonly BalanceBlock[]): LineMessage
   const bubble = balanceBubble(blocks)
   if (Buffer.byteLength(JSON.stringify(bubble), 'utf8') <= MAX_BUBBLE_BYTES) return [bubble]
 
+  /**
+   * **เลื่อนข้างก่อน แล้วค่อยลดรูป** (D52)
+   *
+   * D31 ห้ามตัดใครทิ้งเพราะ Phase 1 ไม่มีที่ให้ไปดูส่วนที่ถูกตัด · carousel เก็บ
+   * ทุกคนไว้ครบเหมือน text แต่ยังเป็นการ์ดที่อ่านง่ายกว่ากองข้อความ · หัวการ์ดที่มี
+   * ยอดรวมซ้ำทุกใบ เพราะคนเลื่อนไปใบที่สามต้องยังรู้ว่ากำลังดูอะไรอยู่
+   */
   const total = blocks.reduce((sum, block) => sum + block.totalSatang, 0)
+  const pages = paginate(
+    [
+      {
+        type: 'box',
+        layout: 'horizontal',
+        contents: [
+          { type: 'text', text: 'ยอดค้าง', size: 'lg', weight: 'bold', flex: 3 },
+          { type: 'text', text: baht(total), size: 'lg', weight: 'bold', align: 'end', flex: 2 },
+        ],
+      },
+    ],
+    blocks.map((block) => creditorBlock(block)),
+  )
+  if (pages !== null) {
+    const carousel: LineFlexMessage = {
+      type: 'flex',
+      altText: bubble.altText,
+      contents: { type: 'carousel', contents: pages },
+    }
+    if (Buffer.byteLength(JSON.stringify(carousel), 'utf8') <= MAX_CAROUSEL_BYTES) {
+      return [carousel]
+    }
+  }
+
   const chunks: string[] = []
   let current = `ยอดค้างทั้งวง ${baht(total)}`
 
@@ -188,19 +222,21 @@ export function balanceCardMessage(blocks: readonly BalanceBlock[]): LineMessage
   return chunks.map((text) => ({ type: 'text', text }))
 }
 
+export type FlexBubble = {
+  type: 'bubble'
+  body: FlexBox
+  /**
+   * ไม่ใส่เลยเมื่อไม่มีปุ่ม — **box ที่ `contents` ว่างถูก LINE ปฏิเสธทั้งข้อความ**
+   * ซึ่งจะทำให้คนพิมพ์ `ยอด` ไม่เห็นอะไรเลย
+   */
+  footer?: FlexBox
+}
+
 export interface LineFlexMessage {
   type: 'flex'
   /** ข้อความที่ขึ้นใน notification และในไคลเอนต์ที่แสดง Flex ไม่ได้ */
   altText: string
-  contents: {
-    type: 'bubble'
-    body: FlexBox
-    /**
-     * ไม่ใส่เลยเมื่อไม่มีปุ่ม — **box ที่ `contents` ว่างถูก LINE ปฏิเสธทั้งข้อความ**
-     * ซึ่งจะทำให้คนพิมพ์ `ยอด` ไม่เห็นอะไรเลย
-     */
-    footer?: FlexBox
-  }
+  contents: FlexBubble | { type: 'carousel'; contents: FlexBubble[] }
   quickReply?: { items: QuickReplyItem[] }
 }
 
@@ -234,6 +270,17 @@ function baht(satang: number): string {
 
 /** ชื่อยาวเกินจอถูกตัด — การ์ดนี้ไม่มีปุ่ม ตัวเลขจึงสำคัญกว่าชื่อเต็ม */
 const MAX_NAME = 24
+
+/**
+ * เพดานของ carousel — **ตั้งให้ปลอดภัยใต้ตัวเลขที่เข้มที่สุดที่หาเจอ** (D52)
+ *
+ * เอกสาร LINE ที่ยิงดูห้าหน้าไม่ยอมบอกตัวเลขตรงๆ · ที่ค้นเจอคือ 10 bubble ต่อ
+ * carousel และ JSON ทั้งข้อความ 50 KB ซึ่ง **ยังไม่ได้ยิงของจริงยืนยัน** · เลือก
+ * ค่าที่ปลอดภัยกว่าทั้งสองข้ออ้าง: เกินเมื่อไหร่ก็ตกลงไปเป็น text ซึ่งเป็นพฤติกรรม
+ * เดิมอยู่แล้ว การเดาต่ำจึงไม่มีทางทำให้แย่ลงกว่าวันนี้
+ */
+const MAX_CAROUSEL_BUBBLES = 10
+const MAX_CAROUSEL_BYTES = 45_000
 
 /**
  * ชื่อคนกินต่อหนึ่งรายการ — ยาวกว่าชื่อคนเดี่ยวเพราะเป็นหลายชื่อต่อกัน
@@ -432,35 +479,53 @@ export function draftCardMessage(
           ],
         }
 
-  return {
+  const rows = card.lines.map((line) =>
+    row(line.isNew ? `${line.name} (ใหม่)` : line.name, line.amountSatang),
+  )
+  const body: FlexBox = {
+    type: 'box',
+    layout: 'vertical',
+    contents: [
+      ...header,
+      { type: 'separator', margin: 'md' },
+      { type: 'box', layout: 'vertical', spacing: 'sm', margin: 'md', contents: rows },
+    ],
+  }
+
+  const message: LineFlexMessage = {
     type: 'flex',
     // ยอดกับจำนวนคนอยู่ในบรรทัดเดียว เพราะนี่คือทั้งหมดที่คนเห็นตอนเด้งเตือน
     altText: `ตรวจบิล ${description} ${baht(card.totalSatang)} · ${card.lines.length} คน`,
     ...(unclaimed === null
       ? {}
       : { quickReply: { items: identityQuickReply(draftId, unclaimed) } }),
-    contents: {
-      type: 'bubble',
-      body: {
-        type: 'box',
-        layout: 'vertical',
-        contents: [
-          ...header,
-          { type: 'separator', margin: 'md' },
-          {
-            type: 'box',
-            layout: 'vertical',
-            spacing: 'sm',
-            margin: 'md',
-            contents: card.lines.map((line) =>
-              row(line.isNew ? `${line.name} (ใหม่)` : line.name, line.amountSatang),
-            ),
-          },
-        ],
-      },
-      footer,
-    },
+    contents: { type: 'bubble', body, footer },
   }
+  if (Buffer.byteLength(JSON.stringify(message), 'utf8') <= MAX_BUBBLE_BYTES) return message
+
+  /**
+   * **วงใหญ่จนใส่ bubble เดียวไม่ไหว — เลื่อนข้างแทนที่จะไม่มีการ์ดเลย** (D52)
+   *
+   * ก่อนหน้านี้การ์ด Draft ไม่มีทางลงเลยสักทาง · ทะลุเพดานเมื่อไหร่ LINE ปฏิเสธ
+   * ทั้ง reply แล้วผลคือ **แถว draft ถูกเขียนไปแล้วแต่ไม่มีการ์ดให้ใครกด** ซึ่งกู้
+   * ไม่ได้จนกว่าจะหมดอายุ 24 ชั่วโมง
+   *
+   * **ปุ่มยืนยันอยู่ทุกใบ** — ปุ่มที่อยู่ใบเดียวคือปุ่มที่คนเลื่อนผ่านแล้วหาไม่เจอ ·
+   * กดซ้ำไม่เป็นไรเพราะ commit คือ `delete draft` + `insert expense` ใน transaction
+   * เดียว ครั้งที่สองจึงลบไม่โดนแล้วไม่ทำอะไรต่อ (ADR 0001)
+   */
+  const pages = paginate(header, rows)
+  if (pages !== null) {
+    const withFooter = pages.map((bubble) => ({ ...bubble, footer }))
+    const carousel: LineFlexMessage = {
+      ...message,
+      contents: { type: 'carousel', contents: withFooter },
+    }
+    if (Buffer.byteLength(JSON.stringify(carousel), 'utf8') <= MAX_CAROUSEL_BYTES) {
+      return carousel
+    }
+  }
+  return message
 }
 
 /**
@@ -592,6 +657,46 @@ export function billListCardMessage(view: {
 }
 
 /**
+ * แบ่งแถวลง bubble หลายใบ — **ทางลงชั้นแรกก่อนลดรูปเป็น text** (D52)
+ *
+ * ตัดตามขนาดจริงของ JSON ไม่ใช่ตามจำนวนแถว เพราะแถวหนักไม่เท่ากัน: แถวรายการ
+ * มีสองบรรทัดในตัวมันเอง ส่วนแถวรายคนมีบรรทัดเดียว
+ *
+ * คืน `null` เมื่อใส่ไม่ลง — ผู้เรียกไปต่อทางเดิม (text) ซึ่งไม่ตัดใครทิ้งเหมือนกัน
+ * · **ห้ามคืน carousel ที่ไม่ครบ** เพราะการ์ดที่ดูสมบูรณ์แต่ขาดคนไปคือยอดหายเงียบ
+ */
+function paginate(header: FlexComponent[], rows: FlexComponent[]): FlexBubble[] | null {
+  const bubbles: FlexBubble[] = []
+  let current: FlexComponent[] = [...header]
+  let hasRow = false
+
+  const bubbleOf = (contents: FlexComponent[]): FlexBubble => ({
+    type: 'bubble',
+    body: { type: 'box', layout: 'vertical', contents },
+  })
+
+  for (const row of rows) {
+    const candidate = [...current, row]
+    const fits =
+      Buffer.byteLength(JSON.stringify(bubbleOf(candidate)), 'utf8') <= MAX_BUBBLE_BYTES
+    if (fits) {
+      current = candidate
+      hasRow = true
+      continue
+    }
+    // แถวเดียวยังไม่ลง bubble เปล่าๆ = ไม่มีทางแบ่งให้ลงได้เลย
+    if (!hasRow) return null
+    bubbles.push(bubbleOf(current))
+    if (bubbles.length >= MAX_CAROUSEL_BUBBLES) return null
+    current = [row]
+    hasRow = true
+  }
+  if (hasRow) bubbles.push(bubbleOf(current))
+  if (bubbles.length === 0 || bubbles.length > MAX_CAROUSEL_BUBBLES) return null
+  return bubbles
+}
+
+/**
  * การ์ดรายละเอียดของบิลใบเดียว — โครงเดียวกับการ์ด Draft **แต่ไม่มีปุ่ม**
  *
  * บิลลง ledger ไปแล้ว ไม่มีอะไรให้กดยืนยันอีก · ปุ่มที่กดแล้วไม่เกิดอะไรคือของที่
@@ -641,6 +746,9 @@ export function billDetailCardMessage(detail: {
     },
     { type: 'separator', margin: 'md' },
   ]
+  /** หัวการ์ดที่ต้องซ้ำทุก bubble ตอนกลายเป็น carousel */
+  const header = [...contents]
+  const itemRows: FlexComponent[] = []
 
   /**
    * รายการมาก่อนรายคน — **สองส่วนตอบคนละคำถาม** (D51)
@@ -650,14 +758,15 @@ export function billDetailCardMessage(detail: {
    * การ์ดที่ตอบได้ครึ่งเดียว
    */
   if (detail.items !== undefined && detail.items.length > 0) {
+    for (const item of detail.items) {
+      itemRows.push(itemRow(shorten(item.name, MAX_NAME), item.eaterNames, item.amountSatang))
+    }
     contents.push({
       type: 'box',
       layout: 'vertical',
       spacing: 'sm',
       margin: 'md',
-      contents: detail.items.map((item) =>
-        itemRow(shorten(item.name, MAX_NAME), item.eaterNames, item.amountSatang),
-      ),
+      contents: itemRows,
     })
     contents.push({ type: 'separator', margin: 'md' })
   }
@@ -681,7 +790,28 @@ export function billDetailCardMessage(detail: {
   if (Buffer.byteLength(JSON.stringify(bubble), 'utf8') <= MAX_BUBBLE_BYTES) return [bubble]
 
   /**
-   * บิลที่หารกันทั้งวงใหญ่ทะลุเพดาน bubble ได้ — ทางลงเดียวกับการ์ด `ยอด` (D44)
+   * **เลื่อนข้างก่อน แล้วค่อยลดรูป** (D52)
+   *
+   * หัวการ์ด (ชื่อ วันที่ คนจ่าย ยอดรวม) ซ้ำอยู่ทุกใบโดยตั้งใจ — คนเลื่อนไปใบที่สาม
+   * แล้วเจอตัวเลขลอยๆ ที่ไม่รู้ว่าของบิลไหนคือการ์ดที่อ่านไม่ได้
+   */
+  const pages = paginate(header, [
+    ...itemRows.map((r) => r),
+    ...detail.lines.map((line) => row(shorten(line.name, MAX_NAME), line.amountSatang)),
+  ])
+  if (pages !== null) {
+    const carousel: LineFlexMessage = {
+      type: 'flex',
+      altText: bubble.altText,
+      contents: { type: 'carousel', contents: pages },
+    }
+    if (Buffer.byteLength(JSON.stringify(carousel), 'utf8') <= MAX_CAROUSEL_BYTES) {
+      return [carousel]
+    }
+  }
+
+  /**
+   * บิลที่หารกันทั้งวงใหญ่ทะลุแม้แต่ carousel — ทางลงเดียวกับการ์ด `ยอด` (D44)
    *
    * ไม่มีทางลงแปลว่า LINE ปฏิเสธทั้งก้อน แล้วการกดแถวจะดูเหมือนไม่เกิดอะไรขึ้นเลย
    * ซึ่งอ่านออกได้อย่างเดียวว่าบอทพัง
