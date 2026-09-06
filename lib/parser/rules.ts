@@ -123,7 +123,7 @@ function parseExpense(body: string, original: string): ParseResult {
       participants,
       // ไม่ระบุชื่อใครเลย = หารทุกคนใน Roster ซึ่งรวมคนจ่ายด้วย
       includesPayer: sawIncludeMe || participants.length === 0,
-      surchargePct: 0,
+      adjustmentSatang: 0,
     },
   }
 }

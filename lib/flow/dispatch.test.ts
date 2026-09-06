@@ -8,7 +8,7 @@ const DRAFT: ExpenseDraft = {
   mode: 'equal',
   participants: [{ name: 'กอล์ฟ', weight: 1 }],
   includesPayer: false,
-  surchargePct: 0,
+  adjustmentSatang: 0,
 }
 
 const expense: ParseResult = { kind: 'expense', draft: DRAFT }

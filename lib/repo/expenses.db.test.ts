@@ -23,7 +23,7 @@ import {
   voidExpense as voidExpenseFixture,
 } from '@/lib/db/fixtures'
 import { restoreGroup, softDeleteGroup } from '@/lib/repo/groups'
-import { addSurcharge, splitExpense } from '@/lib/split'
+import { addAdjustment, splitExpense } from '@/lib/split'
 import type { MemberId, SplitInput } from '@/lib/types'
 import {
   commitExpense,
@@ -83,7 +83,7 @@ function validInput(
     groupId,
     description: 'ข้าวเย็น',
     totalSatang: 120000,
-    surchargePct: 0,
+    adjustmentSatang: 0,
     payerMemberId: payer.id,
     splitMode: 'equal',
     spentAt: '2026-02-01',
@@ -112,7 +112,7 @@ async function commitFromSplit(
     groupId,
     description: 'บิลจาก splitExpense',
     totalSatang: split.totalSatang,
-    surchargePct: split.surchargePct,
+    adjustmentSatang: split.adjustmentSatang,
     payerMemberId: split.payerId,
     splitMode: split.mode,
     spentAt: '2026-02-01',
@@ -122,7 +122,7 @@ async function commitFromSplit(
   }
   const input: CommitExpenseInput = items === undefined ? base : { ...base, items }
   const expense = await commitExpense(input)
-  return { expense, grandTotal: addSurcharge(split.totalSatang, split.surchargePct) }
+  return { expense, grandTotal: addAdjustment(split.totalSatang, split.adjustmentSatang) }
 }
 
 // ─── commitExpense ────────────────────────────────────────────────────
@@ -140,7 +140,7 @@ describe('commitExpense', () => {
     expect(expense.groupId).toBe(group.id)
     expect(expense.description).toBe('ข้าวเย็น')
     expect(expense.totalSatang).toBe(120000)
-    expect(expense.surchargePct).toBe(0)
+    expect(expense.adjustmentSatang).toBe(0)
     expect(expense.payerMemberId).toBe(payer.id)
     expect(expense.splitMode).toBe('equal')
     expect(expense.spentAt).toBe('2026-02-01')
@@ -203,7 +203,7 @@ describe('commitExpense รับผลจริงของ splitExpense', () =
     const [a, b, c] = await makeTrio(group.id)
     const { expense, grandTotal } = await commitFromSplit(group.id, {
       totalSatang: 120000,
-      surchargePct: 0,
+      adjustmentSatang: 0,
       payerId: a.id,
       mode: 'equal',
       participants: [{ memberId: a.id }, { memberId: b.id }, { memberId: c.id }],
@@ -219,7 +219,7 @@ describe('commitExpense รับผลจริงของ splitExpense', () =
     const [a, b, c] = await makeTrio(group.id)
     const { expense, grandTotal } = await commitFromSplit(group.id, {
       totalSatang: 100001,
-      surchargePct: 0,
+      adjustmentSatang: 0,
       payerId: a.id,
       mode: 'equal',
       participants: [{ memberId: a.id }, { memberId: b.id }, { memberId: c.id }],
@@ -230,12 +230,12 @@ describe('commitExpense รับผลจริงของ splitExpense', () =
     expect(amounts.get(a.id)).toBe(33334)
   })
 
-  it('surcharge 17% — เคสที่สูตรเขียนเองด้วย float จะเพี้ยน', async () => {
+  it('ส่วนปรับบวก — ยอดในตารางเท่ากับ Σ shares เป๊ะ', async () => {
     const group = await makeGroup()
     const [a, b, c] = await makeTrio(group.id)
     const { expense, grandTotal } = await commitFromSplit(group.id, {
       totalSatang: 100000,
-      surchargePct: 17,
+      adjustmentSatang: 17000,
       payerId: a.id,
       mode: 'equal',
       participants: [{ memberId: a.id }, { memberId: b.id }, { memberId: c.id }],
@@ -246,24 +246,23 @@ describe('commitExpense รับผลจริงของ splitExpense', () =
     expect([...amounts.values()].reduce((s, n) => s + n, 0)).toBe(117000)
   })
 
-  it('surcharge ที่ตกครึ่งพอดี — สูตร float จะได้คนละยอดกับสูตร BigInt', async () => {
+  it('ส่วนลด — ยอดที่เขียนลง ledger ติดลบไม่ได้ แต่ส่วนปรับติดลบได้ (D54)', async () => {
     const group = await makeGroup()
     const [a, b] = await makeTrio(group.id)
-    // 6450 × 1.17 = 7546.5 พอดี ปัดครึ่งขึ้นได้ 7547
-    // แต่ `Math.round(6450 * (1 + 17/100))` ได้ 7546 เพราะ 1.17 ใน IEEE754
-    // เล็กกว่าค่าจริงนิดเดียว — เคสนี้คือตัวจับว่าฝั่ง repository เผลอเขียนสูตรเอง
     const { expense, grandTotal } = await commitFromSplit(group.id, {
       totalSatang: 6450,
-      surchargePct: 17,
+      adjustmentSatang: -450,
       payerId: a.id,
       mode: 'equal',
       participants: [{ memberId: a.id }, { memberId: b.id }],
     })
 
-    expect(grandTotal).toBe(7547)
+    expect(grandTotal).toBe(6000)
     const amounts = await shareAmounts(expense.id)
-    expect([...amounts.values()].reduce((s, n) => s + n, 0)).toBe(7547)
+    expect([...amounts.values()].reduce((s, n) => s + n, 0)).toBe(6000)
+    // `total_satang` ยังเป็นผลรวมรายชิ้น ไม่ใช่ยอดที่จ่ายจริง — กับดักของ D50
     expect(expense.totalSatang).toBe(6450)
+    expect(expense.adjustmentSatang).toBe(-450)
   })
 
   it('share ที่น้ำหนักไม่เท่ากัน พร้อม surcharge', async () => {
@@ -271,7 +270,7 @@ describe('commitExpense รับผลจริงของ splitExpense', () =
     const [a, b, c] = await makeTrio(group.id)
     const { expense, grandTotal } = await commitFromSplit(group.id, {
       totalSatang: 79999,
-      surchargePct: 17,
+      adjustmentSatang: 13600,
       payerId: a.id,
       mode: 'share',
       participants: [
@@ -290,7 +289,7 @@ describe('commitExpense รับผลจริงของ splitExpense', () =
     const [a, b, c] = await makeTrio(group.id)
     const { expense, grandTotal } = await commitFromSplit(group.id, {
       totalSatang: 100000,
-      surchargePct: 7,
+      adjustmentSatang: 7000,
       payerId: a.id,
       mode: 'exact',
       participants: [
@@ -311,7 +310,7 @@ describe('commitExpense รับผลจริงของ splitExpense', () =
       group.id,
       {
         totalSatang: 30000,
-        surchargePct: 17,
+        adjustmentSatang: 5100,
         payerId: a.id,
         mode: 'itemized',
         participants: [{ memberId: a.id }, { memberId: b.id }, { memberId: c.id }],
@@ -343,14 +342,14 @@ describe('commitExpense รับผลจริงของ splitExpense', () =
 // ─── invariant กลาง ───────────────────────────────────────────────────
 
 describe('commitExpense ปฏิเสธอินพุตที่ผิด', () => {
-  it('Σ shares ไม่เท่ากับยอดรวมหลัง surcharge → throw และไม่เขียนอะไรเลย', async () => {
+  it('Σ shares ไม่เท่ากับยอดรวมหลังส่วนปรับ → throw และไม่เขียนอะไรเลย', async () => {
     const group = await makeGroup()
     const [payer, other] = await makeTrio(group.id)
 
     await expect(
       commitExpense({
         ...validInput(group.id, payer, other),
-        surchargePct: 17,
+        adjustmentSatang: 20400,
         shares: [
           { memberId: payer.id, amountSatang: 60000 },
           { memberId: other.id, amountSatang: 60000 },
@@ -429,24 +428,22 @@ describe('commitExpense ปฏิเสธอินพุตที่ผิด',
     ).rejects.toThrow(/ยอดบิล/)
   })
 
-  it('surchargePct นอกช่วง 0–100 → throw', async () => {
+  it('ส่วนปรับที่ไม่ใช่สตางค์เต็มจำนวน → throw', async () => {
     const group = await makeGroup()
     const [payer, other] = await makeTrio(group.id)
 
     await expect(
-      commitExpense({ ...validInput(group.id, payer, other), surchargePct: 120 }),
-    ).rejects.toThrow(/surchargePct/)
+      commitExpense({ ...validInput(group.id, payer, other), adjustmentSatang: 47.5 }),
+    ).rejects.toThrow(/ส่วนปรับ/)
   })
 
-  it('surchargePct ที่ทศนิยมเกินสองตำแหน่ง → throw เพราะ DB เก็บได้แค่สองตำแหน่ง', async () => {
+  it('ส่วนลดที่ใหญ่กว่าค่าอาหาร → throw ไม่ใช่บิลติดลบ', async () => {
     const group = await makeGroup()
     const [payer, other] = await makeTrio(group.id)
 
-    // numeric(5,2) จะปัด 17.005 เป็น 17.01 เงียบๆ แล้วยอดที่อ่านกลับมาจะไม่ตรง
-    // กับ Σ shares ที่เพิ่งเขียนลงไป — invariant พังหลังบันทึกสำเร็จ
     await expect(
-      commitExpense({ ...validInput(group.id, payer, other), surchargePct: 17.005 }),
-    ).rejects.toThrow(/ทศนิยม/)
+      commitExpense({ ...validInput(group.id, payer, other), adjustmentSatang: -120000 }),
+    ).rejects.toThrow(/ยอดรวมทั้งบิล/)
   })
 
   /**
@@ -564,7 +561,7 @@ describe('commitExpense ปฏิเสธอินพุตที่ผิด',
         ...validInput(group.id, a, b),
         splitMode: 'itemized',
         totalSatang: 100000,
-        surchargePct: 0,
+        adjustmentSatang: 0,
         shares: [
           { memberId: a.id, amountSatang: 0 },
           { memberId: b.id, amountSatang: 100000 },
@@ -585,7 +582,7 @@ describe('commitExpense ปฏิเสธอินพุตที่ผิด',
     ]
     const shares = splitExpense({
       totalSatang: 20000,
-      surchargePct: 17,
+      adjustmentSatang: 3400,
       payerId: a.id,
       mode: 'itemized',
       participants: [{ memberId: a.id }, { memberId: b.id }, { memberId: c.id }],
@@ -596,7 +593,7 @@ describe('commitExpense ปฏิเสธอินพุตที่ผิด',
       ...validInput(group.id, a, b),
       splitMode: 'itemized',
       totalSatang: 20000,
-      surchargePct: 17,
+      adjustmentSatang: 3400,
       payerMemberId: a.id,
       // ลำดับสลับ — ผู้เรียกที่ส่งมาจาก LIFF ไม่มีเหตุผลต้องรักษาลำดับเดิม
       shares: [...shares]
@@ -736,7 +733,7 @@ describe('commitExpense กับ transaction', () => {
         groupId: group.id,
         description: 'บิลที่ต้องหายไปทั้งใบ',
         totalSatang: 120000,
-        surchargePct: 0,
+        adjustmentSatang: 0,
         payerMemberId: payer.id,
         splitMode: 'equal',
         spentAt: '2026-02-01',
@@ -822,7 +819,7 @@ describe('findExpenseById', () => {
       groupId: group.id,
       description: 'หมูกระทะ',
       totalSatang: 90000,
-      surchargePct: 0,
+      adjustmentSatang: 0,
       payerMemberId: a.id,
       splitMode: 'equal',
       spentAt: '2026-03-02',
@@ -864,7 +861,7 @@ describe('listExpenses', () => {
           groupId,
           description: `บิล ${spentAt}`,
           totalSatang: 10000,
-          surchargePct: 0,
+          adjustmentSatang: 0,
           payerMemberId: payer.id,
           splitMode: 'equal',
           spentAt,
@@ -923,7 +920,7 @@ describe('listExpenses', () => {
       groupId: group.id,
       description: 'ที่พัก',
       totalSatang: 50000,
-      surchargePct: 0,
+      adjustmentSatang: 0,
       payerMemberId: payer.id,
       splitMode: 'equal',
       spentAt: '2026-06-01',
@@ -1002,7 +999,7 @@ describe('on delete cascade', () => {
       groupId: group.id,
       description: 'บิลที่จะลบทิ้ง',
       totalSatang: 30000,
-      surchargePct: 0,
+      adjustmentSatang: 0,
       payerMemberId: a.id,
       splitMode: 'itemized',
       spentAt: '2026-09-09',
@@ -1133,12 +1130,15 @@ describe('tolerance ของ assertItemsMatchShares ไม่ปฏิเสธ
         }
       })
       const totalSatang = items.reduce((s, i) => s + i.amountSatang, 0)
-      const surchargePct = [0, 7, 10, 17, 7.5, 12.25][rnd(6)] ?? 0
+      // รวมค่าติดลบ — ส่วนลดที่มีคนตั้งใจใส่ (D54) · **clamp จริง ไม่ใช่แค่หวัง**
+      // เพราะ `amountSatang` ต่ำสุดคือ 1 สตางค์ และรายการอาจมีชิ้นเดียว
+      const picked = [0, 47, 700, 1700, 12250, -1, -500][rnd(7)] ?? 0
+      const adjustmentSatang = Math.max(picked, -(totalSatang - 1))
       const payerId = ids[rnd(count)] ?? ids[0] ?? ''
 
       const shares = splitExpense({
         totalSatang,
-        surchargePct,
+        adjustmentSatang,
         payerId,
         mode: 'itemized',
         participants: ids.map(memberId => ({ memberId })),
@@ -1161,7 +1161,7 @@ describe('tolerance ของ assertItemsMatchShares ไม่ปฏิเสธ
         groupId: group.id,
         description: `สุ่มรอบ ${round}`,
         totalSatang,
-        surchargePct,
+        adjustmentSatang,
         payerMemberId: payerId,
         splitMode: 'itemized',
         spentAt: '2026-02-01',
@@ -1188,7 +1188,7 @@ describe('tolerance ของ assertItemsMatchShares ไม่ปฏิเสธ
     ]
     const shares = splitExpense({
       totalSatang: 40000,
-      surchargePct: 0,
+      adjustmentSatang: 0,
       payerId: a.id,
       mode: 'itemized',
       participants: [{ memberId: a.id }, { memberId: b.id }],
@@ -1204,7 +1204,7 @@ describe('tolerance ของ assertItemsMatchShares ไม่ปฏิเสธ
         groupId: group.id,
         description: 'ย้ายยอดข้ามคน',
         totalSatang: 40000,
-        surchargePct: 0,
+        adjustmentSatang: 0,
         payerMemberId: a.id,
         splitMode: 'itemized',
         spentAt: '2026-02-01',

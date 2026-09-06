@@ -66,14 +66,19 @@ async function seedBills(
   rnd: (n: number) => number,
 ): Promise<void> {
   const modes: SplitMode[] = ['equal', 'share', 'exact', 'itemized']
-  const pcts = [0, 7, 10, 17, 7.5, 12.25]
+  // รวมค่าติดลบ — ส่วนลดที่มีคนตั้งใจใส่ (D54)
+  const adjustments = [0, 47, 700, 1700, 12250, -1, -400]
+
+  /** ส่วนลดต้องไม่กินยอดจนหมด — ยอดที่สุ่มได้ต่ำถึง 1 สตางค์ (D54) */
+  const clamp = (adjustmentSatang: number, totalSatang: number): number =>
+    Math.max(adjustmentSatang, -(totalSatang - 1))
 
   for (let round = 0; round < rounds; round++) {
     const count = 2 + rnd(members.length - 1)
     const crowd = members.slice(0, count)
     const ids = crowd.map(m => m.id)
     const payerId = ids[rnd(count)] ?? ids[0] ?? ''
-    const surchargePct = pcts[rnd(pcts.length)] ?? 0
+    const picked = adjustments[rnd(adjustments.length)] ?? 0
     const mode = modes[rnd(modes.length)] ?? 'equal'
 
     if (mode === 'exact') {
@@ -84,7 +89,13 @@ async function seedBills(
         memberId,
         exactSatang: each[i] ?? 0,
       }))
-      await commitFrom(groupId, { totalSatang, surchargePct, payerId, mode, participants })
+      await commitFrom(groupId, {
+        totalSatang,
+        adjustmentSatang: clamp(picked, totalSatang),
+        payerId,
+        mode,
+        participants,
+      })
       continue
     }
 
@@ -102,7 +113,7 @@ async function seedBills(
         groupId,
         {
           totalSatang,
-          surchargePct,
+          adjustmentSatang: clamp(picked, totalSatang),
           payerId,
           mode,
           participants: ids.map(memberId => ({ memberId })),
@@ -117,9 +128,10 @@ async function seedBills(
       mode === 'share'
         ? ids.map(memberId => ({ memberId, weight: 1 + rnd(4) }))
         : ids.map(memberId => ({ memberId }))
+    const totalSatang = 1 + rnd(500_000)
     await commitFrom(groupId, {
-      totalSatang: 1 + rnd(500_000),
-      surchargePct,
+      totalSatang,
+      adjustmentSatang: clamp(picked, totalSatang),
       payerId,
       mode,
       participants,
@@ -137,7 +149,7 @@ async function commitFrom(
     groupId,
     description: 'บิลของชุดตรวจสัญญา',
     totalSatang: input.totalSatang,
-    surchargePct: input.surchargePct,
+    adjustmentSatang: input.adjustmentSatang,
     payerMemberId: input.payerId,
     splitMode: input.mode,
     spentAt: '2026-02-01',
@@ -158,7 +170,7 @@ async function commitFrom(
 
 // ─── invariant ของเงินที่อยู่ในตารางจริง ──────────────────────────────
 
-describe('Σ share = round(total × (1 + surcharge/100)) — ตรวจด้วย SQL ไม่ใช่ด้วยสูตรเดิม', () => {
+describe('Σ share = total + adjustment — ตรวจด้วย SQL ไม่ใช่ด้วยสูตรเดิม', () => {
   /**
    * ฝั่ง TypeScript ปัดด้วย `floor((2n + d) / 2d)` บน BigInt ส่วนฝั่งนี้ให้
    * Postgres ปัดด้วย `round()` บน `numeric` ซึ่งเป็นการปัดครึ่งขึ้นเหมือนกัน
@@ -173,20 +185,20 @@ describe('Σ share = round(total × (1 + surcharge/100)) — ตรวจด้�
     const { rows } = await getPool().query<{
       id: string
       total_satang: number
-      surcharge_pct: string
+      adjustment_satang: number
       sum_shares: number
       expected: number
     }>(
       `select e.id,
               e.total_satang,
-              e.surcharge_pct,
+              e.adjustment_satang,
               sum(s.amount_satang)::bigint as sum_shares,
-              round(e.total_satang * (1 + e.surcharge_pct / 100))::bigint as expected
+              (e.total_satang + e.adjustment_satang)::bigint as expected
          from expense e
          join expense_share s on s.expense_id = e.id
         where e.group_id = $1
-        group by e.id, e.total_satang, e.surcharge_pct
-       having sum(s.amount_satang) <> round(e.total_satang * (1 + e.surcharge_pct / 100))`,
+        group by e.id, e.total_satang, e.adjustment_satang
+       having sum(s.amount_satang) <> e.total_satang + e.adjustment_satang`,
       [group.id],
     )
 
@@ -523,7 +535,7 @@ describe('ชนิดข้อมูลที่ขอบ — พังตร�
     const [a, b] = await makeCrowd(group.id, 2)
     if (!a || !b) throw new Error('fixture')
     const { rows } = await getPool().query<{ id: string }>(
-      `insert into expense (group_id, description, total_satang, surcharge_pct,
+      `insert into expense (group_id, description, total_satang, adjustment_satang,
                             payer_member_id, split_mode, spent_at, created_by, source)
        values ($1, 'ยอดเกินช่วง', 9007199254740993, 0, $2, 'equal', '2026-02-01', $2, 'rule')
        returning id`,
@@ -556,7 +568,7 @@ describe('ชนิดข้อมูลที่ขอบ — พังตร�
     expect(typeof expense.spentAt).toBe('string')
   })
 
-  it('surcharge_pct ที่เป็น numeric กลับมาเป็น number ที่ตรงค่า', async () => {
+  it('adjustment_satang ที่เป็น bigint กลับมาเป็น number ที่ตรงค่า', async () => {
     const group = await makeGroup()
     const [a, b] = await makeCrowd(group.id, 2)
     if (!a || !b) throw new Error('fixture')
@@ -564,10 +576,10 @@ describe('ชนิดข้อมูลที่ขอบ — พังตร�
       groupId: group.id,
       payerMemberId: a.id,
       totalSatang: 10000,
-      surchargePct: 7.5,
+      adjustmentSatang: 750,
       shares: [{ memberId: b.id, amountSatang: 10750 }],
     })
-    expect(expense.surchargePct).toBe(7.5)
+    expect(expense.adjustmentSatang).toBe(750)
   })
 })
 
@@ -586,7 +598,7 @@ describe('ลบวงจริงต้องไม่เหลือเศษ�
       group.id,
       {
         totalSatang: 30000,
-        surchargePct: 0,
+        adjustmentSatang: 0,
         payerId: a.id,
         mode: 'itemized',
         participants: [{ memberId: a.id }, { memberId: b.id }],
@@ -707,7 +719,7 @@ describe('D25 — ห้ามมีสูตรเงินใน SQL ของ
 
     expect(moneyMath.test('select sum(s.amount_satang) from expense_share s')).toBe(true)
     expect(moneyMath.test('select sum(input_tokens) from llm_usage')).toBe(false)
-    expect(scaling.test('round(total_satang * (1 + surcharge_pct / 100))')).toBe(true)
+    expect(scaling.test('round(total_satang * (1 + rate / 100))')).toBe(true)
     expect(scaling.test('select amount_satang from expense_share')).toBe(false)
   })
 })

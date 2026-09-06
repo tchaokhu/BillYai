@@ -144,7 +144,7 @@ export interface ExpenseFixture {
   /** ยอดต่อคน **รวม surcharge แล้ว** — fixtures ไม่ตรวจว่ารวมกันตรง total ไหม */
   shares: ReadonlyArray<{ memberId: MemberId; amountSatang: number; weight?: number }>
   description?: string
-  surchargePct?: number
+  adjustmentSatang?: number
   splitMode?: SplitMode
   spentAt?: string
   eventTag?: string | null
@@ -159,7 +159,7 @@ export async function makeExpense(
   const q = db(tx)
   const { rows } = await q.query<ExpenseRow>(
     `insert into expense (
-       group_id, event_tag, description, total_satang, surcharge_pct,
+       group_id, event_tag, description, total_satang, adjustment_satang,
        payer_member_id, split_mode, spent_at, created_by, source
      ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
      returning *`,
@@ -168,7 +168,7 @@ export async function makeExpense(
       fixture.eventTag ?? null,
       fixture.description ?? 'ข้าว',
       fixture.totalSatang,
-      fixture.surchargePct ?? 0,
+      fixture.adjustmentSatang ?? 0,
       fixture.payerMemberId,
       fixture.splitMode ?? 'equal',
       fixture.spentAt ?? DEFAULT_SPENT_AT,

@@ -11,7 +11,7 @@ const VALID: ExpenseDraft = {
     { name: 'ตูน', weight: 1 },
   ],
   includesPayer: false,
-  surchargePct: 0,
+  adjustmentSatang: 0,
 }
 
 /** payload ที่แก้ทีละฟิลด์ — ของจริงเดินทางผ่าน `JSON.stringify` เสมอ */
@@ -61,8 +61,8 @@ describe('parseDraftPayload — payload ที่เชื่อไม่ได�
     ['ยอดเป็นสตริง', 'totalSatang', '120000'],
     ['โหมดที่ไม่รู้จัก', 'mode', 'weighted'],
     ['includesPayer ไม่ใช่ boolean', 'includesPayer', 'true'],
-    ['surcharge ติดลบ', 'surchargePct', -1],
-    ['surcharge เกินร้อย', 'surchargePct', 101],
+    ['ส่วนปรับไม่ใช่ integer', 'adjustmentSatang', 47.5],
+    ['ส่วนลดใหญ่กว่ายอดบิล', 'adjustmentSatang', -999_999],
     ['participants ไม่ใช่ array', 'participants', {}],
     ['ชื่อว่าง', 'participants', [{ name: '  ', weight: 1 }]],
     ['น้ำหนักเป็นศูนย์', 'participants', [{ name: 'กอล์ฟ', weight: 0 }]],

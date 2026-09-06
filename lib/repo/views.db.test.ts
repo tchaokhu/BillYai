@@ -37,7 +37,7 @@ const DRAFT: ExpenseDraft = {
     { name: 'ตูน', weight: 1 },
   ],
   includesPayer: false,
-  surchargePct: 0,
+  adjustmentSatang: 0,
 }
 
 const LINES: DraftLine[] = [

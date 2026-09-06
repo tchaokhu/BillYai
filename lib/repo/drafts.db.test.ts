@@ -25,7 +25,7 @@ const DRAFT: ExpenseDraft = {
   mode: 'equal',
   participants: [{ name: 'กอล์ฟ', weight: 1 }],
   includesPayer: false,
-  surchargePct: 0,
+  adjustmentSatang: 0,
 }
 
 /** ผลหารที่คำนวณเสร็จแล้ว — เก็บคู่กับ draft เพื่อให้ยอดบนการ์ดกับ ledger ตรงกัน */

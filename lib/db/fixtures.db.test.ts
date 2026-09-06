@@ -132,17 +132,17 @@ describe('บิล', () => {
     expect(expense.spentAt).toBe('2026-01-01')
   })
 
-  it('surchargePct กลับมาเป็นตัวเลข ไม่ใช่ numeric string', async () => {
+  it('adjustmentSatang กลับมาเป็นตัวเลข ไม่ใช่ string จาก bigint', async () => {
     const group = await makeGroup()
     const payer = await makeMember(group.id)
     const expense = await makeExpense({
       groupId: group.id,
       payerMemberId: payer.id,
       totalSatang: 100000,
-      surchargePct: 17,
+      adjustmentSatang: 17,
       shares: [{ memberId: payer.id, amountSatang: 117000 }],
     })
-    expect(expense.surchargePct).toBe(17)
+    expect(expense.adjustmentSatang).toBe(17)
   })
 
   it('ไม่ตรวจ invariant ให้ — เทสต์ต้องสร้างสภาพที่ผิดปกติได้', async () => {

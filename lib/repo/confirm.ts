@@ -180,7 +180,7 @@ export async function confirmDraft(
       groupId: group.id,
       description: draft.draft.description,
       totalSatang: draft.draft.totalSatang,
-      surchargePct: draft.draft.surchargePct,
+      adjustmentSatang: draft.draft.adjustmentSatang,
       payerMemberId,
       splitMode: draft.draft.mode,
       spentAt: draft.spentAt,

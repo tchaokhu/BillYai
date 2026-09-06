@@ -64,7 +64,7 @@ describe('บิลแบบง่าย — ไม่ระบุชื่อ�
         mode: 'share',
         participants: [],
         includesPayer: true,
-        surchargePct: 0,
+        adjustmentSatang: 0,
       },
     })
   })
@@ -123,7 +123,7 @@ describe('ระบุชื่อคนหลังยอด', () => {
           { name: 'ตูน', weight: 1 },
         ],
         includesPayer: false,
-        surchargePct: 0,
+        adjustmentSatang: 0,
       },
     })
   })
@@ -140,7 +140,7 @@ describe('ระบุชื่อคนหลังยอด', () => {
           { name: 'ตูน', weight: 1 },
         ],
         includesPayer: true,
-        surchargePct: 0,
+        adjustmentSatang: 0,
       },
     })
   })
@@ -242,7 +242,7 @@ describe('#tag', () => {
         mode: 'share',
         participants: [],
         includesPayer: true,
-        surchargePct: 0,
+        adjustmentSatang: 0,
       },
     })
   })
@@ -363,7 +363,7 @@ describe('เคสรวมจากสเปก', () => {
           { name: 'ตูน', weight: 1 },
         ],
         includesPayer: true,
-        surchargePct: 0,
+        adjustmentSatang: 0,
       },
     })
   })
@@ -380,11 +380,11 @@ describe('เคสรวมจากสเปก', () => {
     })
   })
 
-  it('rule parser คืน mode share และ surchargePct 0 เสมอ', () => {
+  it('rule parser คืน mode share และส่วนปรับ 0 เสมอ', () => {
     for (const text of ['+ ข้าว 1200', '+ ข้าว 1200 กอล์ฟ', '+ ข้าว 1200 กอล์ฟx2 รวมฉัน']) {
       expect(parseMessage(text)).toMatchObject({
         kind: 'expense',
-        draft: { mode: 'share', surchargePct: 0 },
+        draft: { mode: 'share', adjustmentSatang: 0 },
       })
     }
   })

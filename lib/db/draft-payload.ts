@@ -106,17 +106,20 @@ export function parseDraftPayload(value: unknown): ExpenseDraft | null {
   const description = nonBlankString(payload.description)
   if (description === null) return null
 
-  const { totalSatang, mode, includesPayer, surchargePct } = payload
+  const { totalSatang, mode, includesPayer, adjustmentSatang } = payload
   if (typeof totalSatang !== 'number' || !Number.isSafeInteger(totalSatang) || totalSatang <= 0) {
     return null
   }
   if (!isSplitMode(mode)) return null
   if (typeof includesPayer !== 'boolean') return null
+  // ติดลบได้ (ส่วนลด · D54) แต่ต้องเป็นสตางค์เต็มจำนวน และลดจนบิลไม่เหลือค่าไม่ได้
   if (
-    typeof surchargePct !== 'number' ||
-    !Number.isFinite(surchargePct) ||
-    surchargePct < 0 ||
-    surchargePct > 100
+    typeof adjustmentSatang !== 'number' ||
+    !Number.isSafeInteger(adjustmentSatang) ||
+    // ผลบวกต้องอยู่ในช่วงด้วย ไม่ใช่แค่สองตัวตั้ง — ไม่งั้น `addAdjustment` จะ throw
+    // ขึ้นไปถึง webhook ซึ่งเป็นสิ่งเดียวที่ไฟล์นี้มีไว้กัน
+    !Number.isSafeInteger(totalSatang + adjustmentSatang) ||
+    totalSatang + adjustmentSatang <= 0
   ) {
     return null
   }
@@ -130,7 +133,7 @@ export function parseDraftPayload(value: unknown): ExpenseDraft | null {
     mode,
     participants,
     includesPayer,
-    surchargePct,
+    adjustmentSatang,
   }
 
   // `exactOptionalPropertyTypes` เปิดอยู่ — คีย์ที่ไม่มีต้องไม่โผล่มาเป็น undefined
