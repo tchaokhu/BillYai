@@ -1,12 +1,12 @@
 import { describe, it, expect } from 'vitest'
-import { addSurcharge, splitExpense } from './split'
+import { addAdjustment, splitExpense } from './split'
 import type { Item, SplitInput, SplitMode } from './types'
 
 /** อินพุตพื้นฐาน — เทสต์แต่ละตัวทับเฉพาะ field ที่สนใจ */
 function input(over: Partial<SplitInput> = {}): SplitInput {
   return {
     totalSatang: 30000,
-    surchargePct: 0,
+    adjustmentSatang: 0,
     payerId: 'a',
     mode: 'equal',
     participants: [{ memberId: 'a' }, { memberId: 'b' }, { memberId: 'c' }],
@@ -16,6 +16,15 @@ function input(over: Partial<SplitInput> = {}): SplitInput {
 
 const amounts = (shares: { amountSatang: number }[]) => shares.map((s) => s.amountSatang)
 const sum = (ns: number[]) => ns.reduce((a, b) => a + b, 0)
+
+describe('addAdjustment', () => {
+  it('บวกจำนวนเงินตรงๆ ไม่มีการปัด', () => {
+    // 44000 + 4700 คือเลขจากใบเสร็จจริง (soul bingsu 4 ก.ย. 2026) ที่เปอร์เซ็นต์
+    // เก็บไม่ลงตัว: 4700/44000 = 10.6818…% ซึ่ง numeric(5,2) ปัดเหลือ 10.68
+    // แล้วได้ 48699 ขาดไปหนึ่งสตางค์ (ADR 0004)
+    expect(addAdjustment(44000, 4700)).toBe(48700)
+  })
+})
 
 describe('splitExpense — โหมด equal', () => {
   it('หารเท่าลงตัว', () => {
@@ -99,88 +108,66 @@ describe('splitExpense — โหมด share', () => {
   })
 })
 
-describe('splitExpense — surcharge', () => {
-  it('17% บวกเข้ายอดรวมแล้วหารเท่า', () => {
+describe('splitExpense — ส่วนปรับ', () => {
+  it('ส่วนปรับบวกเข้ายอดรวมแล้วหารเท่า', () => {
     const participants = [{ memberId: 'a' }, { memberId: 'b' }]
-    const shares = splitExpense(input({ totalSatang: 10000, surchargePct: 17, participants }))
+    const shares = splitExpense(input({ totalSatang: 10000, adjustmentSatang: 1700, participants }))
     expect(sum(amounts(shares))).toBe(11700)
     expect(amounts(shares)).toEqual([5850, 5850])
   })
 
-  it('กระจายตามสัดส่วน subtotal ไม่ใช่หารเท่า — คนกินเยอะจ่าย surcharge เยอะกว่า', () => {
+  it('กระจายตามสัดส่วน subtotal ไม่ใช่หารเท่า — คนกินเยอะจ่ายส่วนปรับเยอะกว่า', () => {
     const participants = [
       { memberId: 'a', weight: 3 },
       { memberId: 'b', weight: 1 },
     ]
     const shares = splitExpense(
-      input({ mode: 'share', totalSatang: 10000, surchargePct: 17, participants }),
+      input({ mode: 'share', totalSatang: 10000, adjustmentSatang: 1700, participants }),
     )
-    // subtotal 7500/2500 → surcharge 1700 ต้องแบ่ง 1275/425 ไม่ใช่ 850/850
+    // subtotal 7500/2500 → ส่วนปรับ 1700 ต้องแบ่ง 1275/425 ไม่ใช่ 850/850
     expect(amounts(shares)).toEqual([8775, 2925])
     expect(amounts(shares)[0]! - 7500).toBe(1275)
     expect(amounts(shares)[1]! - 2500).toBe(425)
     expect(sum(amounts(shares))).toBe(11700)
   })
 
-  it('surchargePct เป็น 0 → ยอดรวมเท่าเดิม', () => {
-    const shares = splitExpense(input({ totalSatang: 30000, surchargePct: 0 }))
+  it('ส่วนลดทำให้ทุกคนจ่ายน้อยลงตามสัดส่วน subtotal ไม่ใช่คนละเท่ากัน', () => {
+    const participants = [
+      { memberId: 'a', weight: 3 },
+      { memberId: 'b', weight: 1 },
+    ]
+    // คูปองลด 200 บนบิล 10000 → subtotal 7500/2500 ต้องลด 150/50 ไม่ใช่ 100/100
+    const shares = splitExpense(
+      input({ mode: 'share', totalSatang: 10000, adjustmentSatang: -200, participants }),
+    )
+    expect(amounts(shares)).toEqual([7350, 2450])
+    expect(sum(amounts(shares))).toBe(9800)
+  })
+
+  it('ส่วนปรับเป็น 0 → ยอดรวมเท่าเดิม', () => {
+    const shares = splitExpense(input({ totalSatang: 30000, adjustmentSatang: 0 }))
     expect(sum(amounts(shares))).toBe(30000)
   })
 
-  it('เปอร์เซ็นต์ทศนิยม', () => {
-    const participants = [{ memberId: 'a' }]
-    const shares = splitExpense(input({ totalSatang: 1000, surchargePct: 7.5, participants }))
-    expect(amounts(shares)).toEqual([1075])
+})
+
+describe('addAdjustment — ด่านตรวจ', () => {
+  it('ส่วนลดที่ใหญ่กว่ายอดรายชิ้น → error ไม่ใช่บิลติดลบ', () => {
+    expect(() => addAdjustment(44000, -44000)).toThrow()
+    expect(() => addAdjustment(44000, -50000)).toThrow()
   })
 
-  it('ปัดครึ่งขึ้นเป็น integer สตางค์', () => {
-    const one = [{ memberId: 'a' }]
-    // 333 × 1.17 = 389.61 → 390
-    expect(
-      amounts(splitExpense(input({ totalSatang: 333, surchargePct: 17, participants: one }))),
-    ).toEqual([390])
-    // 10 × 1.05 = 10.5 → ครึ่งพอดี ปัดขึ้นเป็น 11
-    expect(
-      amounts(splitExpense(input({ totalSatang: 10, surchargePct: 5, participants: one }))),
-    ).toEqual([11])
-  })
-
-  it('surchargePct ติดลบหรือไม่ finite → error', () => {
-    expect(() => splitExpense(input({ surchargePct: -1 }))).toThrow()
-    expect(() => splitExpense(input({ surchargePct: NaN }))).toThrow()
-    expect(() => splitExpense(input({ surchargePct: Infinity }))).toThrow()
-  })
-
-  /**
-   * ด่านตรวจต้องอยู่ติดกับสูตร ไม่ใช่ที่ชั้น persistence อย่างเดียว
-   *
-   * `addSurcharge` เป็นสูตรร่วมของทั้งระบบแล้ว แต่ถ้าปล่อยให้ค่าที่ DB เก็บไม่ได้
-   * ผ่านมาถึงตรงนี้ ผู้ใช้จะเห็นผลหารที่ดูสมบูรณ์บนจอ แล้วบิลไปตายตอนกดบันทึก
-   * ซึ่งเป็นจังหวะที่แก้อะไรไม่ได้แล้ว
-   */
-  it('surchargePct เกิน 100 → error', () => {
-    expect(() => addSurcharge(10000, 100.01)).toThrow()
-    expect(() => addSurcharge(10000, 101)).toThrow()
-    expect(() => splitExpense(input({ surchargePct: 120 }))).toThrow()
-  })
-
-  it('surchargePct ทศนิยมเกิน 2 ตำแหน่ง → error', () => {
-    // `surcharge_pct numeric(5,2)` ปัด 17.005 เป็น 17.01 เงียบๆ ตอน insert
-    expect(() => addSurcharge(10000, 17.005)).toThrow()
-    // VAT 7 + service 10.5 บวกกันแบบ float ได้ค่านี้มาเอง ไม่ต้องมีใครพิมพ์
-    expect(() => addSurcharge(10000, 17.500000000000002)).toThrow()
-    expect(() => splitExpense(input({ surchargePct: 17.005 }))).toThrow()
-  })
-
-  it('ค่าที่ขอบพอดียังผ่าน — ด่านต้องไม่แน่นเกินไป', () => {
-    expect(addSurcharge(10000, 100)).toBe(20000)
-    expect(addSurcharge(10000, 17.25)).toBe(11725)
-    expect(addSurcharge(10000, 0)).toBe(10000)
+  it('ส่วนปรับที่ไม่ใช่สตางค์เต็มจำนวน → error', () => {
+    // ชั้น persistence เรียกฟังก์ชันนี้ตรงๆ เพื่อตรวจ invariant ซ้ำ ค่าที่หลุด
+    // มาจาก LIFF จึงถึงที่นี่ได้โดยไม่ผ่าน `assertInput`
+    expect(() => addAdjustment(44000, 47.5)).toThrow()
+    expect(() => addAdjustment(44000, NaN)).toThrow()
+    expect(() => addAdjustment(44000, Infinity)).toThrow()
   })
 })
 
 describe('splitExpense — โหมด exact', () => {
-  it('ยอดที่ระบุตรงๆ ไม่มี surcharge → ได้คืนเป๊ะตามที่ระบุ', () => {
+  it('ยอดที่ระบุตรงๆ ไม่มีส่วนปรับ → ได้คืนเป๊ะตามที่ระบุ', () => {
     const participants = [
       { memberId: 'a', exactSatang: 10000 },
       { memberId: 'b', exactSatang: 15000 },
@@ -190,14 +177,14 @@ describe('splitExpense — โหมด exact', () => {
     expect(amounts(shares)).toEqual([10000, 15000, 5000])
   })
 
-  it('surcharge กระจายตามสัดส่วน exactSatang', () => {
+  it('ส่วนปรับกระจายตามสัดส่วน exactSatang', () => {
     const participants = [
       { memberId: 'a', exactSatang: 333 },
       { memberId: 'b', exactSatang: 667 },
     ]
-    // 1000 × 1.10 = 1100 → a 366.3 / b 733.7 เศษตกกับคนที่เศษมากกว่า (b)
+    // 1100 → a 366.3 / b 733.7 เศษตกกับคนที่เศษมากกว่า (b)
     const shares = splitExpense(
-      input({ mode: 'exact', totalSatang: 1000, surchargePct: 10, participants }),
+      input({ mode: 'exact', totalSatang: 1000, adjustmentSatang: 100, participants }),
     )
     expect(amounts(shares)).toEqual([366, 734])
     expect(sum(amounts(shares))).toBe(1100)
@@ -210,7 +197,7 @@ describe('splitExpense — โหมด exact', () => {
       { memberId: 'c', exactSatang: 0 },
     ]
     const shares = splitExpense(
-      input({ mode: 'exact', totalSatang: 1000, surchargePct: 17, participants }),
+      input({ mode: 'exact', totalSatang: 1000, adjustmentSatang: 170, participants }),
     )
     expect(shares).toEqual([
       { memberId: 'a', amountSatang: 1170 },
@@ -225,9 +212,9 @@ describe('splitExpense — โหมด exact', () => {
       { memberId: 'b', exactSatang: 100 },
       { memberId: 'c', exactSatang: 100 },
     ]
-    // 300 × 1.005 = 301.5 → ปัดขึ้น 302 เหลือเศษ 2 ก้อน: payer 'c' ก่อน แล้ว 'a'
+    // 302 → คนละ 100.67 เหลือเศษ 2 ก้อน: payer 'c' ก่อน แล้ว 'a'
     const shares = splitExpense(
-      input({ mode: 'exact', totalSatang: 300, surchargePct: 0.5, payerId: 'c', participants }),
+      input({ mode: 'exact', totalSatang: 300, adjustmentSatang: 2, payerId: 'c', participants }),
     )
     expect(amounts(shares)).toEqual([101, 100, 101])
     expect(sum(amounts(shares))).toBe(302)
@@ -287,7 +274,7 @@ describe('splitExpense — โหมด itemized', () => {
   it('คนที่ไม่ได้กินอะไรเลยได้ 0 แต่ยังอยู่ในผลลัพธ์ และยอดรวมไม่เพี้ยน', () => {
     const items = [{ name: 'ข้าว', amountSatang: 1000, memberIds: ['a', 'b'] }]
     const shares = splitExpense(
-      input({ mode: 'itemized', totalSatang: 1000, surchargePct: 17, items }),
+      input({ mode: 'itemized', totalSatang: 1000, adjustmentSatang: 170, items }),
     )
     expect(shares).toEqual([
       { memberId: 'a', amountSatang: 585 },
@@ -313,7 +300,7 @@ describe('splitExpense — โหมด itemized', () => {
       { name: 'สลัด', amountSatang: 2500, memberIds: ['b'] },
     ]
     const shares = splitExpense(
-      input({ mode: 'itemized', totalSatang: 10000, surchargePct: 17, participants, items }),
+      input({ mode: 'itemized', totalSatang: 10000, adjustmentSatang: 1700, participants, items }),
     )
     expect(amounts(shares)).toEqual([8775, 2925])
     expect(sum(amounts(shares))).toBe(11700)
@@ -439,23 +426,27 @@ describe('splitExpense — property test', () => {
   }
 
   /**
-   * grandTotal ที่คาดหวัง — คำนวณอิสระจาก split.ts ด้วย BigInt ล้วน
-   * ปัดครึ่งขึ้น = floor((2n + d) / 2d)
+   * ส่วนปรับที่สุ่มมา — **มีค่าติดลบด้วย** เพราะส่วนลดที่มีคนตั้งใจใส่ถูกต้องแล้ว
+   * (D54) · ค่าลบถูกจำกัดให้เล็กกว่ายอดบิลเสมอ ยอดรวมทั้งบิลจึงยังมากกว่าศูนย์
    */
-  function expectedGrandTotal(totalSatang: number, surchargePct: number): number {
-    const [intPart = '', fracPart = ''] = String(surchargePct).split('.')
-    const denominator = 100n * 10n ** BigInt(fracPart.length)
-    const numerator = BigInt(totalSatang) * (denominator + BigInt(intPart + fracPart))
-    return Number((2n * numerator + denominator) / (2n * denominator))
+  const adjustments = [0, 1, 47, 170, 700, 1700, -1, -50, -300]
+
+  /**
+   * ส่วนลดต้องไม่กินยอดจนหมด — `addAdjustment` ปฏิเสธยอดรวมที่ไม่เหลือค่า (D54)
+   *
+   * generator สุ่มยอดได้ต่ำถึง 1 สตางค์ การจับคู่กับส่วนลดคงที่จึงระเบิดเป็นครั้งคราว
+   * ตามค่า seed ซึ่งคือเทสต์ที่แดงเองวันหลังโดยไม่มีใครแตะโค้ด
+   */
+  function clampAdjustment(adjustmentSatang: number, totalSatang: number): number {
+    return Math.max(adjustmentSatang, -(totalSatang - 1))
   }
 
-  const pcts = [0, 0.5, 7, 7.5, 10, 12.25, 17, 100]
   const modes = ['equal', 'exact', 'share', 'itemized'] as const
 
   function randomInput(rnd: (n: number) => number, mode: SplitMode): SplitInput {
     const count = 1 + rnd(8)
     const memberIds = Array.from({ length: count }, (_, i) => `p${i}`)
-    const surchargePct = pcts[rnd(pcts.length)] ?? 0
+    const adjustmentSatang = adjustments[rnd(adjustments.length)] ?? 0
     // บางรอบ payer ไม่ได้ร่วมหาร (จ่ายแทนคนอื่นล้วน) — ต้องไม่พัง
     const payerId = `p${rnd(count + 1)}`
 
@@ -468,7 +459,7 @@ describe('splitExpense — property test', () => {
         memberId,
         exactSatang: exact[i] ?? 0,
       }))
-      return { totalSatang, surchargePct, payerId, mode, participants }
+      return { totalSatang, adjustmentSatang: clampAdjustment(adjustmentSatang, totalSatang), payerId, mode, participants }
     }
 
     if (mode === 'itemized') {
@@ -484,7 +475,14 @@ describe('splitExpense — property test', () => {
       if (items.reduce((a, it) => a + it.amountSatang, 0) === 0 && first) first.amountSatang = 1
       const totalSatang = items.reduce((a, it) => a + it.amountSatang, 0)
       const participants = memberIds.map((memberId) => ({ memberId }))
-      return { totalSatang, surchargePct, payerId, mode, participants, items }
+      return {
+        totalSatang,
+        adjustmentSatang: clampAdjustment(adjustmentSatang, totalSatang),
+        payerId,
+        mode,
+        participants,
+        items,
+      }
     }
 
     const totalSatang = 1 + rnd(10_000_000)
@@ -494,11 +492,11 @@ describe('splitExpense — property test', () => {
         memberId,
         weight: rnd(2) === 0 ? 1 + rnd(9) : (1 + rnd(19)) / 2,
       }))
-      return { totalSatang, surchargePct, payerId, mode, participants }
+      return { totalSatang, adjustmentSatang: clampAdjustment(adjustmentSatang, totalSatang), payerId, mode, participants }
     }
     return {
       totalSatang,
-      surchargePct,
+      adjustmentSatang,
       payerId,
       mode,
       participants: memberIds.map((memberId) => ({ memberId })),
@@ -508,7 +506,7 @@ describe('splitExpense — property test', () => {
   it('Σ share === grandTotal เป๊ะ และไม่มีค่าติดลบ — สุ่ม 1000 รอบ ครบ 4 โหมด', () => {
     const rnd = makeRandom(987_654_321)
     // นับไว้ยืนยันว่าตัวสุ่มสุ่มจริง — ถ้า PRNG เพี้ยนจนสร้างแต่เคสง่ายๆ ต้องรู้ตัว
-    const hit = { zeroShare: 0, manyPeople: 0, payerOutside: 0, withSurcharge: 0 }
+    const hit = { zeroShare: 0, manyPeople: 0, payerOutside: 0, withAdjustment: 0, negative: 0 }
 
     for (let round = 0; round < 1000; round++) {
       const mode = modes[round % modes.length] ?? 'equal'
@@ -517,19 +515,21 @@ describe('splitExpense — property test', () => {
 
       expect(shares).toHaveLength(spec.participants.length)
       expect(shares.map((s) => s.memberId)).toEqual(spec.participants.map((p) => p.memberId))
-      expect(sum(amounts(shares))).toBe(expectedGrandTotal(spec.totalSatang, spec.surchargePct))
+      expect(sum(amounts(shares))).toBe(spec.totalSatang + spec.adjustmentSatang)
       expect(amounts(shares).every((a) => Number.isSafeInteger(a) && a >= 0)).toBe(true)
 
       if (amounts(shares).some((a) => a === 0)) hit.zeroShare++
       if (spec.participants.length > 1) hit.manyPeople++
       if (!spec.participants.some((p) => p.memberId === spec.payerId)) hit.payerOutside++
-      if (spec.surchargePct > 0) hit.withSurcharge++
+      if (spec.adjustmentSatang > 0) hit.withAdjustment++
+      if (spec.adjustmentSatang < 0) hit.negative++
     }
 
     expect(hit.zeroShare).toBeGreaterThan(0)
     expect(hit.manyPeople).toBeGreaterThan(100)
     expect(hit.payerOutside).toBeGreaterThan(0)
-    expect(hit.withSurcharge).toBeGreaterThan(100)
+    expect(hit.withAdjustment).toBeGreaterThan(100)
+    expect(hit.negative).toBeGreaterThan(100)
   })
 
   it('ผลลัพธ์ deterministic — อินพุตเดิมให้ผลเดิมเสมอ', () => {

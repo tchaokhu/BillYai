@@ -109,7 +109,7 @@ export function buildDraft(
 
   const shares = splitExpense({
     totalSatang: draft.totalSatang,
-    surchargePct: draft.surchargePct,
+    adjustmentSatang: draft.adjustmentSatang,
     payerId: PAYER_KEY,
     mode: draft.mode,
     participants,

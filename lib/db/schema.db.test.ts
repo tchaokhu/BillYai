@@ -91,6 +91,8 @@ const COLUMNS: Record<string, readonly ColumnSpec[]> = {
     ['link_token_hash', 'bytea', true],
   ],
   expense: [
+    // ส่วนปรับท้ายบิล — bigint เพราะติดลบได้และต้องไม่มีการปัด (D50/D54)
+    ['adjustment_satang', 'bigint', false],
     ['created_at', 'timestamp with time zone', false],
     ['created_by', 'uuid', false],
     ['description', 'text', false],
@@ -102,7 +104,6 @@ const COLUMNS: Record<string, readonly ColumnSpec[]> = {
     ['spent_at', 'date', false],
     ['split_mode', 'text', false],
     ['status', 'text', false],
-    ['surcharge_pct', 'numeric', false],
     // เงินเป็น bigint สตางค์ ไม่ใช่ numeric ไม่ใช่ integer
     ['total_satang', 'bigint', false],
     // ไม่มี `voided_by` — ตรวจว่าคนยกเลิกอยู่วงเดียวกับบิลไม่ได้จาก FK ของ
@@ -190,7 +191,7 @@ describe('คอลัมน์', () => {
 })
 
 describe('ความละเอียดของ numeric', () => {
-  it('surcharge_pct เป็น numeric(5,2) และ weight เป็น numeric(8,3)', async () => {
+  it('numeric เหลือแค่ weight สองตัว — ส่วนปรับเป็น bigint แล้ว (D50)', async () => {
     const found = await rows<{
       table_name: string
       column_name: string
@@ -203,7 +204,6 @@ describe('ความละเอียดของ numeric', () => {
        order by table_name, column_name`,
     )
     expect(found).toEqual([
-      { table_name: 'expense', column_name: 'surcharge_pct', numeric_precision: 5, numeric_scale: 2 },
       { table_name: 'expense_item_share', column_name: 'weight', numeric_precision: 8, numeric_scale: 3 },
       { table_name: 'expense_share', column_name: 'weight', numeric_precision: 8, numeric_scale: 3 },
     ])
@@ -238,7 +238,7 @@ describe('check constraint', () => {
     expect(names).toContain('ledger_group_identity_check')
 
     // ช่วงค่า
-    expect(names).toContain('expense_surcharge_pct_check')
+    expect(names).toContain('expense_total_after_adjustment_check')
     expect(names).toContain('expense_share_weight_check')
   })
 
@@ -261,7 +261,7 @@ describe('check constraint', () => {
       rows(`insert into ledger_group (kind) values ('personal')`),
     ).rejects.toThrow()
 
-    // surcharge เกิน 100%
+    // ส่วนลดที่ใหญ่กว่าค่าอาหาร — ยอดรวมทั้งบิลเหลือศูนย์หรือติดลบ (D54)
     const member = await rows<{ id: string }>(
       `insert into member (group_id, display_name) values ($1, 'ก') returning id`,
       [groupId],
@@ -269,9 +269,9 @@ describe('check constraint', () => {
     const memberId = member[0]?.id
     await expect(
       rows(
-        `insert into expense (group_id, description, total_satang, surcharge_pct,
+        `insert into expense (group_id, description, total_satang, adjustment_satang,
                               payer_member_id, split_mode, spent_at, created_by, source)
-         values ($1, 'x', 100, 101, $2, 'equal', '2026-01-01', $2, 'rule')`,
+         values ($1, 'x', 100, -100, $2, 'equal', '2026-01-01', $2, 'rule')`,
         [groupId, memberId],
       ),
     ).rejects.toThrow()

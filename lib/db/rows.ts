@@ -27,7 +27,7 @@ export type ActorVia = 'line' | 'liff' | 'link' | 'web'
 
 // ─── ตัวช่วยแปลงค่า ───────────────────────────────────────────────────
 
-/** `numeric` จาก `pg` เป็น string เสมอ — ใช้กับ `surcharge_pct` และ `weight` เท่านั้น */
+/** `numeric` จาก `pg` เป็น string เสมอ — เหลือแค่ `weight` ตัวเดียวหลัง D50 */
 export function numericToNumber(value: string): number {
   const n = Number(value)
   if (!Number.isFinite(n)) {
@@ -179,7 +179,7 @@ export type ExpenseRow = {
   event_tag: string | null
   description: string
   total_satang: number
-  surcharge_pct: string
+  adjustment_satang: number
   payer_member_id: string
   split_mode: SplitMode
   /** `'YYYY-MM-DD'` — parser ใน client.ts กันไม่ให้กลายเป็น `Date` */
@@ -198,7 +198,7 @@ export interface Expense {
   description: string
   /** ยอดก่อนบวก surcharge */
   totalSatang: number
-  surchargePct: number
+  adjustmentSatang: number
   payerMemberId: MemberId
   splitMode: SplitMode
   /** `'YYYY-MM-DD'` ตามเวลาที่คนจดกรอก ไม่ใช่ timestamp */
@@ -217,7 +217,7 @@ export function toExpense(row: ExpenseRow): Expense {
     eventTag: row.event_tag,
     description: row.description,
     totalSatang: assertSatang(row.total_satang, 'expense.total_satang'),
-    surchargePct: numericToNumber(row.surcharge_pct),
+    adjustmentSatang: assertSatang(row.adjustment_satang, 'expense.adjustment_satang'),
     payerMemberId: row.payer_member_id,
     splitMode: row.split_mode,
     spentAt: row.spent_at,

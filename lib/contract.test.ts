@@ -55,7 +55,10 @@ describe('split — invariant ยอดรวม ทุกโหมด', () => {
     for (let i = 0; i < 2000; i++) {
       const count = 1 + rnd(8)
       const ids = Array.from({ length: count }, (_, k) => `m${k}`)
-      const pct = [0, 7, 10, 17, 7.5][rnd(5)] ?? 0
+      // รวมค่าติดลบด้วย — ส่วนลดที่มีคนตั้งใจใส่ถูกต้องแล้ว (D54)
+      // ส่วนลดต้องไม่กินยอดจนหมด — ยอดที่สุ่มได้ต่ำถึง 1 สตางค์ การจับคู่กับ
+      // ส่วนลดคงที่จะระเบิดตาม seed ซึ่งคือเทสต์ที่แดงเองวันหลังโดยไม่มีใครแตะโค้ด
+      const picked = [0, 47, 700, 1700, -1, -250][rnd(6)] ?? 0
       const mode = (['equal', 'share', 'exact', 'itemized'] as const)[rnd(4)] ?? 'equal'
 
       let input
@@ -65,7 +68,7 @@ describe('split — invariant ยอดรวม ทุกโหมด', () => {
         if (total === 0) continue
         input = {
           totalSatang: total,
-          surchargePct: pct,
+          adjustmentSatang: Math.max(picked, -(total - 1)),
           payerId: ids[rnd(count)] ?? 'm0',
           mode,
           participants: ids.map((id, k) => ({ memberId: id, exactSatang: each[k] ?? 0 })),
@@ -82,16 +85,17 @@ describe('split — invariant ยอดรวม ทุกโหมด', () => {
         const total = items.reduce((a, b) => a + b.amountSatang, 0)
         input = {
           totalSatang: total,
-          surchargePct: pct,
+          adjustmentSatang: Math.max(picked, -(total - 1)),
           payerId: ids[rnd(count)] ?? 'm0',
           mode,
           participants: ids.map((id) => ({ memberId: id })),
           items,
         }
       } else {
+        const totalSatang = 1 + rnd(1_000_000)
         input = {
-          totalSatang: 1 + rnd(1_000_000),
-          surchargePct: pct,
+          totalSatang,
+          adjustmentSatang: Math.max(picked, -(totalSatang - 1)),
           payerId: ids[rnd(count)] ?? 'm0',
           mode,
           participants: ids.map((id) => ({ memberId: id, weight: 1 + rnd(5) })),
@@ -99,26 +103,17 @@ describe('split — invariant ยอดรวม ทุกโหมด', () => {
       }
 
       const shares = splitExpense(input)
-      const grand = expectedGrandTotal(input.totalSatang, pct)
+      const grand = input.totalSatang + input.adjustmentSatang
       expect(shares.reduce((a, s) => a + s.amountSatang, 0)).toBe(grand)
       expect(shares.every((s) => s.amountSatang >= 0)).toBe(true)
       expect(shares).toHaveLength(count)
     }
   })
 
-  /** คำนวณยอดรวมหลัง surcharge อิสระจาก implementation — ปัดครึ่งขึ้น */
-  function expectedGrandTotal(total: number, pct: number): number {
-    const decimals = (String(pct).split('.')[1] ?? '').length
-    const scale = 10 ** decimals
-    const num = BigInt(total) * BigInt(Math.round(pct * scale) + 100 * scale)
-    const den = BigInt(100 * scale)
-    return Number((2n * num + den) / (2n * den))
-  }
-
-  it('surcharge กระจายตามสัดส่วน ไม่ใช่หารเท่า', () => {
+  it('ส่วนปรับกระจายตามสัดส่วน ไม่ใช่หารเท่า', () => {
     const shares = splitExpense({
       totalSatang: 10000,
-      surchargePct: 17,
+      adjustmentSatang: 1700,
       payerId: 'a',
       mode: 'share',
       participants: [
@@ -126,7 +121,7 @@ describe('split — invariant ยอดรวม ทุกโหมด', () => {
         { memberId: 'b', weight: 1 },
       ],
     })
-    // subtotal 7500/2500 → surcharge 1700 แบ่ง 1275/425 (สัดส่วน 3:1)
+    // subtotal 7500/2500 → ส่วนปรับ 1700 แบ่ง 1275/425 (สัดส่วน 3:1)
     expect(shares[0]?.amountSatang).toBe(8775)
     expect(shares[1]?.amountSatang).toBe(2925)
   })
@@ -135,7 +130,7 @@ describe('split — invariant ยอดรวม ทุกโหมด', () => {
     expect(() =>
       splitExpense({
         totalSatang: 10000,
-        surchargePct: 0,
+        adjustmentSatang: 0,
         payerId: 'a',
         mode: 'exact',
         participants: [
@@ -149,7 +144,7 @@ describe('split — invariant ยอดรวม ทุกโหมด', () => {
   it('itemized — คนที่ไม่ได้กินอะไรเลยได้ 0 แต่ยอดรวมไม่เพี้ยน', () => {
     const shares = splitExpense({
       totalSatang: 900,
-      surchargePct: 17,
+      adjustmentSatang: 153,
       payerId: 'a',
       mode: 'itemized',
       participants: [{ memberId: 'a' }, { memberId: 'b' }, { memberId: 'c' }],

@@ -48,7 +48,7 @@ types.setTypeParser(types.builtins.DATE, (value: string): string => value)
 
 /**
  * `numeric` (oid 1700) **ตั้งใจไม่ตั้ง parser** — ปล่อยเป็น string ให้ mapper
- * ของแต่ละตารางแปลงเอง. ในโปรเจกต์นี้ numeric มีแค่ `surcharge_pct` กับ `weight`
+ * ของแต่ละตารางแปลงเอง. ในโปรเจกต์นี้ numeric เหลือแค่ `weight` ตัวเดียว
  * ซึ่งทั้งคู่ไม่ใช่เงิน (เงินเป็น bigint สตางค์เสมอ) การแปลงทั่วระบบจะทำให้
  * numeric ที่เพิ่มมาทีหลังกลายเป็น float โดยไม่มีใครสังเกต
  *

@@ -1,5 +1,5 @@
 /**
- * split — แตกบิลหนึ่งใบเป็น Share รายคน ทั้ง 4 โหมด พร้อมกระจาย surcharge
+ * split — แตกบิลหนึ่งใบเป็น Share รายคน ทั้ง 4 โหมด พร้อมกระจายส่วนปรับ
  *
  * invariant: Σ share.amountSatang === grandTotal เป๊ะเสมอ ทุกโหมด ทุกอินพุต
  */
@@ -7,67 +7,29 @@ import { distribute } from './money'
 import type { Item, MemberId, Participant, Share, SplitInput } from './types'
 
 /**
- * ขอบเขตของ `surchargePct` — ตรงกับคอลัมน์ `surcharge_pct numeric(5,2)`
- * และ check constraint `surcharge_pct >= 0 and <= 100`
+ * ส่วนปรับท้ายบิลบวกเข้ากับผลรวมรายชิ้นตรงๆ — **ไม่มีการปัดที่ไหนเลย**
  *
- * ด่านนี้อยู่ที่นี่ ไม่ใช่ที่ชั้น persistence อย่างเดียว เพราะ `addSurcharge` คือ
- * สูตรร่วมของทั้งระบบ ถ้าค่าที่ DB เก็บไม่ได้ผ่านมาถึงการคำนวณ ผู้ใช้จะเห็น
- * ผลหารที่ดูสมบูรณ์บนจอก่อน แล้วบิลค่อยไปตายตอนกดบันทึก ซึ่งสายเกินจะแก้แล้ว
+ * เคยเป็น `addSurcharge(total, pct)` ที่คูณเปอร์เซ็นต์ด้วย BigInt แล้วปัดครึ่งขึ้น ·
+ * `surcharge_pct numeric(5,2)` เก็บส่วนต่างจริงไม่ลงตัว (4700/44000 = 10.6818…%
+ * เหลือ 10.68 แล้วยอดขาดไปหนึ่งสตางค์) จึงเปลี่ยนมาเก็บเป็นจำนวนเงิน (ADR 0004)
+ *
+ * **ติดลบได้** — ส่วนลดหรือคูปองที่มีคนตั้งใจใส่ (D54) · ด่านที่ห้ามคือยอดรวมทั้งบิล
+ * ต้องมากกว่าศูนย์ **ซึ่งอยู่ในฟังก์ชันนี้เอง ไม่ใช่ `assertInput`** — `assertInput`
+ * เห็นแค่ `totalSatang` ตัวเดียว ยังไม่รู้ว่าส่วนปรับจะลบมันจนหมดหรือเปล่า
+ *
+ * export ออกมาเพราะชั้น persistence ต้องตรวจ invariant `Σ share = total + adjustment`
+ * ซ้ำอีกชั้นก่อนเขียนลง DB (shares อาจมาจาก LIFF ที่ไม่ได้ผ่าน `splitExpense`) —
+ * ถ้าที่นั่นเขียนสูตรเอง จะมีสองสูตรที่ต้องตรงกันตลอดไป ซึ่งคือบั๊กที่รอเกิด
  */
-const MAX_PCT = 100
-const MAX_PCT_DECIMALS = 2
-
-/**
- * จำนวนทศนิยมของเปอร์เซ็นต์ — อ่านจากสตริงด้วยเหตุผลเดียวกับ `weightDecimals`
- * ใน money.ts: เป็นวิธีเดียวที่บอกได้ว่า float ตัวนั้น "แทน" ทศนิยมกี่ตำแหน่งจริงๆ
- */
-function pctDecimals(pct: number): number {
-  if (!Number.isFinite(pct)) throw new Error(`surchargePct ไม่ถูกต้อง: ${pct}`)
-  if (pct < 0) throw new Error(`surchargePct ติดลบไม่ได้: ${pct}`)
-  if (pct > MAX_PCT) throw new Error(`surchargePct เกิน ${MAX_PCT} ไม่ได้: ${pct}`)
-  const text = String(pct)
-  if (text.includes('e') || text.includes('E')) {
-    throw new Error(`surchargePct อยู่นอกช่วงที่รองรับ: ${pct}`)
-  }
-  const decimals = (text.split('.')[1] ?? '').length
-  // VAT 7 + service charge 10.5 บวกกันเป็น float ได้ 17.500000000000002 มาเอง
-  // โดยไม่มีใครพิมพ์ — numeric(5,2) จะปัดทิ้งเงียบๆ แล้ว Σ share ที่เขียนลงไป
-  // จะไม่ตรงกับยอดที่คำนวณใหม่จากแถวที่อ่านกลับมา
-  if (decimals > MAX_PCT_DECIMALS) {
-    throw new Error(`surchargePct มีทศนิยมได้ไม่เกิน ${MAX_PCT_DECIMALS} ตำแหน่ง: ${pct}`)
-  }
-  return decimals
-}
-
-/** ขยายเปอร์เซ็นต์เป็น integer เพื่อคำนวณด้วย BigInt ล้วน */
-function scalePct(pct: number, decimals: number): bigint {
-  const [intPart = '', fracPart = ''] = String(pct).split('.')
-  return BigInt(intPart + fracPart.padEnd(decimals, '0'))
-}
-
-/**
- * ยอดรวมหลังบวก surcharge ปัดครึ่งขึ้นเป็นสตางค์
- *
- * คำนวณด้วย BigInt ล้วน เพราะ `10 * 1.05` ใน IEEE754 ไม่ใช่ 10.5 เป๊ะ —
- * `total × pct / 100` แบบ float สะสม error จนเคสครึ่งพอดีปัดผิดทาง
- *
- * ปัดครึ่งขึ้น = floor((2n + d) / 2d) เมื่อ n/d คือค่าจริง
- *
- * export ออกมาเพราะชั้น persistence ต้องตรวจ invariant
- * `Σ share = total + surcharge` ซ้ำอีกชั้นก่อนเขียนลง DB (shares อาจมาจาก LLM
- * หรือ LIFF ที่ไม่ได้ผ่าน `splitExpense`) — ถ้าที่นั่นเขียนสูตรเอง จะมีสองสูตร
- * ที่ต้องปัดตรงกันตลอดไป ซึ่งคือบั๊กที่รอเกิด
- */
-export function addSurcharge(totalSatang: number, surchargePct: number): number {
-  const decimals = pctDecimals(surchargePct)
-  const scale = 10n ** BigInt(decimals)
-  const pct = scalePct(surchargePct, decimals)
-  const denominator = 100n * scale
-  const numerator = BigInt(totalSatang) * (denominator + pct)
-  const grandTotal = Number((2n * numerator + denominator) / (2n * denominator))
-
+export function addAdjustment(totalSatang: number, adjustmentSatang: number): number {
+  const grandTotal = totalSatang + adjustmentSatang
   if (!Number.isSafeInteger(grandTotal)) {
-    throw new Error(`ยอดรวมหลังบวก surcharge อยู่นอกช่วงที่รองรับ: ${grandTotal}`)
+    throw new Error(`ยอดรวมหลังบวกส่วนปรับอยู่นอกช่วงที่รองรับ: ${grandTotal}`)
+  }
+  // ส่วนลดใหญ่กว่าค่าอาหารคือจดผิด ไม่ใช่ร้านแจกเงิน — และบิลที่ยอดรวมเป็นศูนย์
+  // ไม่มีหนี้อยู่ในนั้นเลย จึงไม่มีเหตุผลให้ลง ledger
+  if (grandTotal <= 0) {
+    throw new Error(`ยอดรวมทั้งบิลต้องมากกว่า 0: ${grandTotal}`)
   }
   return grandTotal
 }
@@ -230,7 +192,7 @@ export function splitExpense(input: SplitInput): Share[] {
   const { participants, payerId } = input
   assertInput(input)
 
-  const grandTotal = addSurcharge(input.totalSatang, input.surchargePct)
+  const grandTotal = addAdjustment(input.totalSatang, input.adjustmentSatang)
   const weights = weightsFor(input)
 
   const payerIndex = participants.findIndex((p) => p.memberId === payerId)

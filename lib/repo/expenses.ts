@@ -7,7 +7,7 @@
  *    โดยที่ไม่มีใครรู้ตัว ยอมให้ไม่มีบิลเลยดีกว่ามีบิลที่แตกไม่ครบ
  * 2. **invariant `Σ share = total + surcharge` ตรวจซ้ำที่นี่** แม้ `splitExpense`
  *    ตรวจไปแล้ว เพราะ shares เข้ามาทาง LLM/LIFF/เว็บได้โดยไม่ผ่าน `splitExpense`
- *    และใช้ `addSurcharge` ตัวเดียวกับที่ `split.ts` ใช้ — เขียนสูตรใหม่ที่นี่
+ *    และใช้ `addAdjustment` ตัวเดียวกับที่ `split.ts` ใช้ — เขียนสูตรใหม่ที่นี่
  *    เมื่อไหร่ ก็จะมีสองสูตรที่ต้องปัดเศษให้ตรงกันตลอดไป
  *
  * ไม่มีการคิดเลขเงินใน SQL ที่ไหนในไฟล์นี้ (D25)
@@ -30,7 +30,7 @@ import {
   type ExpenseShareRow,
   type ExpenseSource,
 } from '@/lib/db/rows'
-import { addSurcharge, splitExpense } from '@/lib/split'
+import { addAdjustment, splitExpense } from '@/lib/split'
 import type { MemberId, SplitMode } from '@/lib/types'
 
 // ─── สัญญาที่โมดูลอื่นเรียก ───────────────────────────────────────────
@@ -38,9 +38,10 @@ import type { MemberId, SplitMode } from '@/lib/types'
 export interface CommitExpenseInput {
   groupId: string
   description: string
-  /** ยอดก่อนบวก surcharge */
+  /** ผลรวมรายชิ้น — ยอดก่อนบวกส่วนปรับ */
   totalSatang: number
-  surchargePct: number
+  /** ส่วนปรับท้ายบิลเป็นสตางค์ ติดลบได้ (D50/D54) */
+  adjustmentSatang: number
   payerMemberId: MemberId
   splitMode: SplitMode
   /** `'YYYY-MM-DD'` ตามวันที่คนจดกรอก ไม่ใช่ timestamp */
@@ -140,13 +141,9 @@ function assertInput(input: CommitExpenseInput): void {
   if (!Number.isSafeInteger(input.totalSatang) || input.totalSatang <= 0) {
     throw new Error(`ยอดบิลต้องเป็นสตางค์ integer ที่มากกว่า 0 — ได้ ${input.totalSatang}`)
   }
-  if (!Number.isFinite(input.surchargePct) || input.surchargePct < 0 || input.surchargePct > 100) {
-    throw new Error(`surchargePct ต้องอยู่ระหว่าง 0–100 — ได้ ${input.surchargePct}`)
-  }
-  // `surcharge_pct` เป็น numeric(5,2): 17.005 จะถูกปัดเป็น 17.01 เงียบๆ ตอน insert
-  // แล้วยอดที่คำนวณจากแถวที่อ่านกลับมาจะไม่ตรงกับ Σ shares ที่เพิ่งเขียนลงไป
-  if (decimalPlaces(input.surchargePct, 'surchargePct') > 2) {
-    throw new Error(`surchargePct มีทศนิยมได้ไม่เกิน 2 ตำแหน่ง — ได้ ${input.surchargePct}`)
+  // ติดลบได้ (ส่วนลด · D54) · `addAdjustment` เป็นคนบอกว่ายอดรวมทั้งบิลยังมากกว่า 0
+  if (!Number.isSafeInteger(input.adjustmentSatang)) {
+    throw new Error(`ส่วนปรับต้องเป็นสตางค์ integer — ได้ ${input.adjustmentSatang}`)
   }
   if (input.description.trim() === '') {
     throw new Error('รายละเอียดบิลว่างไม่ได้')
@@ -183,12 +180,12 @@ function assertInput(input: CommitExpenseInput): void {
     }
   }
 
-  // invariant กลางของทั้งระบบ — ใช้ `addSurcharge` ตัวเดียวกับ split.ts
-  const grandTotal = addSurcharge(input.totalSatang, input.surchargePct)
+  // invariant กลางของทั้งระบบ — ใช้ `addAdjustment` ตัวเดียวกับ split.ts
+  const grandTotal = addAdjustment(input.totalSatang, input.adjustmentSatang)
   const sum = input.shares.reduce((acc, share) => acc + share.amountSatang, 0)
   if (sum !== grandTotal) {
     throw new Error(
-      `ผลรวมยอดรายคน (${sum}) ไม่เท่ากับยอดบิลหลังบวก surcharge (${grandTotal})`,
+      `ผลรวมยอดรายคน (${sum}) ไม่เท่ากับยอดบิลหลังบวกส่วนปรับ (${grandTotal})`,
     )
   }
 
@@ -246,7 +243,7 @@ function assertItems(input: CommitExpenseInput, participants: ReadonlySet<Member
  * ควรอธิบาย และหน้าจอแก้บิลจะคำนวณได้อีกคำตอบหนึ่ง
  *
  * ตรวจด้วย `splitExpense` ตัวเดียวกับที่แตกบิล ไม่ได้เขียนสูตรใหม่ที่นี่ —
- * ด้วยเหตุผลเดียวกับที่ `addSurcharge` ถูก export ออกมาใช้ร่วม
+ * ด้วยเหตุผลเดียวกับที่ `addAdjustment` ถูก export ออกมาใช้ร่วม
  *
  * **เผื่อไว้ `items.length + 1` สตางค์ต่อคน**: เศษของแต่ละชิ้นตกกับใครขึ้นกับ
  * ลำดับผู้ร่วมหาร ซึ่งผู้เรียกจาก LIFF ไม่มีเหตุผลต้องรักษาให้ตรงกับตอนคำนวณ
@@ -259,7 +256,7 @@ function assertItemsMatchShares(
 ): void {
   const recomputed = splitExpense({
     totalSatang: input.totalSatang,
-    surchargePct: input.surchargePct,
+    adjustmentSatang: input.adjustmentSatang,
     payerId: input.payerMemberId,
     mode: 'itemized',
     participants: input.shares.map(share => ({ memberId: share.memberId })),
@@ -333,7 +330,7 @@ async function assertSameGroup(
 async function insertExpense(db: Queryable, input: CommitExpenseInput): Promise<Expense> {
   const { rows } = await db.query<ExpenseRow>(
     `insert into expense (
-       group_id, event_tag, description, total_satang, surcharge_pct,
+       group_id, event_tag, description, total_satang, adjustment_satang,
        payer_member_id, split_mode, spent_at, created_by, source
      ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
      returning *`,
@@ -342,7 +339,7 @@ async function insertExpense(db: Queryable, input: CommitExpenseInput): Promise<
       input.eventTag ?? null,
       input.description,
       input.totalSatang,
-      input.surchargePct,
+      input.adjustmentSatang,
       input.payerMemberId,
       input.splitMode,
       input.spentAt,

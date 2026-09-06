@@ -9,7 +9,7 @@ function draft(overrides: Partial<ExpenseDraft> = {}): ExpenseDraft {
     mode: 'equal',
     participants: [],
     includesPayer: true,
-    surchargePct: 0,
+    adjustmentSatang: 0,
     ...overrides,
   }
 }

@@ -33,10 +33,13 @@ export interface Item {
 }
 
 export interface SplitInput {
-  /** ยอดก่อนบวก surcharge */
+  /** ผลรวมรายชิ้น — ยอดก่อนบวกส่วนปรับ */
   totalSatang: number
-  /** 0–100 เช่น 17 = VAT 7% + service charge 10% */
-  surchargePct: number
+  /**
+   * ส่วนปรับท้ายบิลเป็นสตางค์ — **ติดลบได้** เมื่อเป็นส่วนลดที่มีคนตั้งใจใส่
+   * (D50/D54) · เคยเป็น `surchargePct` ซึ่งเก็บส่วนต่างจริงไม่ลงตัว (ADR 0004)
+   */
+  adjustmentSatang: number
   /** คนที่ควักเงิน — ใช้เป็นตัวตัดสินเมื่อเศษเท่ากัน (tie-break) */
   payerId: MemberId
   mode: SplitMode
@@ -92,7 +95,8 @@ export interface ExpenseDraft {
   participants: DraftParticipant[]
   /** `รวมฉัน` หรือไม่ระบุชื่อใครเลย → true */
   includesPayer: boolean
-  surchargePct: number
+  /** ส่วนปรับท้ายบิลเป็นสตางค์ ติดลบได้ (D50/D54) */
+  adjustmentSatang: number
 }
 
 /**

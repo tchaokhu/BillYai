@@ -9,7 +9,7 @@
  */
 
 import { computeDebts } from '@/lib/debt'
-import { addSurcharge } from '@/lib/split'
+import { addAdjustment } from '@/lib/split'
 import { buildBalance, type BalanceView } from '@/lib/flow/balance'
 import type { BillDetailInput, BillListInput } from '@/lib/flow/bills'
 import type { GroupView } from '@/lib/line/webhook'
@@ -131,17 +131,17 @@ export async function loadBillList(
       description: expense.description,
       spentAt: expense.spentAt,
       /**
-       * **ยอดหลังบวก surcharge** ไม่ใช่ค่าดิบในคอลัมน์ซึ่งเป็นยอดก่อนบวก
+       * **ยอดหลังบวกส่วนปรับ** ไม่ใช่ค่าดิบในคอลัมน์ซึ่งเป็นผลรวมรายชิ้น
        *
-       * `loadBillDetail` โชว์ผลรวมรายคนซึ่งรวม surcharge แล้ว · ปล่อยให้สองที่
+       * `loadBillDetail` โชว์ผลรวมรายคนซึ่งรวมส่วนปรับแล้ว · ปล่อยให้สองที่
        * คิดคนละทางแปลว่าคนกดแถวที่เขียนว่า ฿1,000 จะเจอการ์ดที่เขียนว่า ฿1,100
-       * · Phase 1 ยังตั้ง `surchargePct: 0` เสมอ แต่สคีมากับ `commitExpense`
-       * รับ 0–100 อยู่แล้ว ความไม่ตรงจะโผล่วันแรกที่มีคนเขียนค่าที่ไม่ใช่ศูนย์
+       * · ไวยากรณ์ในแชทยังตั้ง `adjustmentSatang: 0` เสมอ ส่วนปรับที่ไม่ใช่ศูนย์
+       * จะมาจาก LIFF (M9) ความไม่ตรงจะโผล่วันแรกที่มีบิล itemized ใบแรก
        *
-       * `addSurcharge` เป็นตัวเดียวกับที่ `splitExpense` ใช้ตอนลง ledger — ไม่ใช่
+       * `addAdjustment` เป็นตัวเดียวกับที่ `splitExpense` ใช้ตอนลง ledger — ไม่ใช่
        * สูตรที่สอง
        */
-      totalSatang: addSurcharge(expense.totalSatang, expense.surchargePct),
+      totalSatang: addAdjustment(expense.totalSatang, expense.adjustmentSatang),
     })),
     /**
      * **ยิง query นับเฉพาะตอนที่ชนเพดาน** — ได้แถวไม่ครบ 20 แปลว่าไม่มีอะไรถูกตัด
