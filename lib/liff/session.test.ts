@@ -48,6 +48,7 @@ function deps(over: Partial<OpenLiffSessionDeps> = {}) {
       calls.find += 1
       return draftRecord()
     },
+    loadRoster: async () => ['กอล์ฟ', 'ตูน', 'แนน'],
   }
   return { calls, deps: { ...base, ...over } }
 }
@@ -64,6 +65,7 @@ describe('openLiffSession — ทางที่ผ่าน', () => {
         draft: draftRecord().draft,
         lines: draftRecord().lines,
         spentAt: '2026-09-07',
+        roster: ['กอล์ฟ', 'ตูน', 'แนน'],
       },
     })
   })
@@ -206,6 +208,28 @@ describe('openLiffSession — ของเราเองล่ม', () => {
   it('Postgres ต่อไม่ได้ → upstream ไม่ใช่ draft-gone', async () => {
     const { deps: d } = deps({
       findDraft: async () => {
+        throw new Error('ECONNREFUSED')
+      },
+    })
+    const result = await openLiffSession({ idToken: 'a.b.c', draftId: DRAFT_ID }, d)
+    expect(result).toEqual({ ok: false, reason: 'upstream' })
+  })
+})
+
+/**
+ * D55 — ปุ่ม `+ เพิ่มคน` เปิดสองทาง: กดชื่อที่วงรู้จักแล้ว หรือพิมพ์ชื่อใหม่ ·
+ * ทางแรกต้องมี Roster ของวงมาด้วย และดึงจาก LINE ไม่ได้ (C1) DB เราเป็นแหล่งเดียว
+ */
+describe('openLiffSession — Roster ของวงสำหรับปุ่มเพิ่มคน (D55)', () => {
+  it('วงที่ยังไม่มีใครกดยืนยันสักใบได้ Roster ว่าง ไม่ใช่พัง', async () => {
+    const { deps: d } = deps({ loadRoster: async () => [] })
+    const result = await openLiffSession({ idToken: 'a.b.c', draftId: DRAFT_ID }, d)
+    expect(result.ok && result.session.roster).toEqual([])
+  })
+
+  it('Roster อ่านไม่ได้ → upstream ไม่ใช่การ์ดเปล่า', async () => {
+    const { deps: d } = deps({
+      loadRoster: async () => {
         throw new Error('ECONNREFUSED')
       },
     })

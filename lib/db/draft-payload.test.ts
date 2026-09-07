@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { parseDraftPayload } from './draft-payload'
-import type { ExpenseDraft } from '@/lib/types'
+import { parseDraftPayload, parseStoredDraft } from './draft-payload'
+import type { DraftLine, ExpenseDraft } from '@/lib/types'
 
 const VALID: ExpenseDraft = {
   description: 'ข้าว',
@@ -91,5 +91,126 @@ describe('น้ำหนักต้องอยู่ในช่วงที�
 
   it.each([1, 2, 1.5, 0.001, 99999.999])('น้ำหนัก %s ผ่าน', (weight) => {
     expect(parseDraftPayload(withField('participants', [{ name: 'กอล์ฟ', weight }]))).not.toBeNull()
+  })
+})
+
+const ITEMIZED: ExpenseDraft = {
+  description: 'soul bingsu',
+  // **ผลรวมรายชิ้น ไม่ใช่ยอดที่จ่ายจริง** — ส่วนต่างอยู่ใน `adjustmentSatang`
+  totalSatang: 44000,
+  mode: 'itemized',
+  participants: [
+    { name: 'aek', weight: 1 },
+    { name: 'dear', weight: 1 },
+  ],
+  includesPayer: true,
+  adjustmentSatang: 4700,
+  items: [
+    { name: 'บิงซู', amountSatang: 22000, eaterNames: ['aek', 'dear'] },
+    { name: 'ฮันนี่โทสต์', amountSatang: 18000, eaterNames: ['aek'] },
+    // ไม่ติ๊กใครเลย = ของกลาง หารทุกคนในบิล (D53)
+    { name: 'ชาเขียว', amountSatang: 4000, eaterNames: [] },
+  ],
+}
+
+function itemized(items: unknown, over: Record<string, unknown> = {}): unknown {
+  return JSON.parse(JSON.stringify({ ...ITEMIZED, items, ...over }))
+}
+
+describe('parseDraftPayload — รายการรายชิ้น (D48 · หน้าจอ LIFF)', () => {
+  it('บิล itemized ผ่าน `JSON.stringify` แล้วกลับมาครบ รวมรายการของกลาง', () => {
+    expect(parseDraftPayload(JSON.parse(JSON.stringify(ITEMIZED)))).toEqual(ITEMIZED)
+  })
+
+  it('โหมดอื่นต้องไม่มี `items` — ส่งมาแปลว่าคนเขียนเข้าใจผิด', () => {
+    expect(parseDraftPayload(withField('items', ITEMIZED.items))).toBeNull()
+  })
+
+  it('โหมด itemized ที่ไม่มีรายการเลยใช้ไม่ได้', () => {
+    expect(parseDraftPayload(itemized([]))).toBeNull()
+    expect(parseDraftPayload(itemized(undefined))).toBeNull()
+  })
+
+  /**
+   * **ด่านเดียวกับ `itemizedSubtotals`** — มันโยนเมื่อผลรวมรายการไม่เท่ายอดบิล
+   * และ throw ตรงนั้นแปลว่า 500 ระหว่างกดยืนยัน · จับที่นี่ = การ์ดใช้ไม่ได้
+   * ซึ่งเป็นคำตอบที่ผู้ใช้ทำอะไรต่อได้
+   */
+  it('ผลรวมรายการต้องเท่า `totalSatang` เป๊ะ', () => {
+    expect(parseDraftPayload(itemized([{ ...ITEMIZED.items?.[0] }]))).toBeNull()
+  })
+
+  it('ราคารายการติดลบไม่ได้ ต่างจากส่วนปรับ', () => {
+    expect(
+      parseDraftPayload(
+        itemized(
+          [
+            { name: 'บิงซู', amountSatang: 48000, eaterNames: ['aek'] },
+            { name: 'ส่วนลด', amountSatang: -4000, eaterNames: ['aek'] },
+          ],
+          { totalSatang: 44000 },
+        ),
+      ),
+    ).toBeNull()
+  })
+
+  it('ชื่อคนกินซ้ำในรายการเดียวใช้ไม่ได้', () => {
+    expect(
+      parseDraftPayload(
+        itemized([{ name: 'บิงซู', amountSatang: 44000, eaterNames: ['aek', 'aek'] }]),
+      ),
+    ).toBeNull()
+  })
+
+  it.each([
+    ['ชื่อรายการว่าง', [{ name: '  ', amountSatang: 44000, eaterNames: [] }]],
+    ['ราคาไม่ใช่ integer', [{ name: 'บิงซู', amountSatang: 44000.5, eaterNames: [] }]],
+    // `assertItems` ใน `expenses.ts` ต้องการ `> 0` — ต้องตรงกันทุกชั้น
+    [
+      'ราคาศูนย์',
+      [
+        { name: 'บิงซู', amountSatang: 44000, eaterNames: [] },
+        { name: 'น้ำเปล่า', amountSatang: 0, eaterNames: [] },
+      ],
+    ],
+    ['ไม่มี eaterNames', [{ name: 'บิงซู', amountSatang: 44000 }]],
+    ['eaterNames ไม่ใช่ array', [{ name: 'บิงซู', amountSatang: 44000, eaterNames: 'aek' }]],
+    ['ชื่อคนกินว่าง', [{ name: 'บิงซู', amountSatang: 44000, eaterNames: [''] }]],
+    ['ไม่ใช่ object', ['บิงซู']],
+  ])('%s → null', (_label, items) => {
+    expect(parseDraftPayload(itemized(items))).toBeNull()
+  })
+})
+
+/**
+ * **ชื่อคนกินต้องอยู่ในแถวของการ์ด** — invariant ข้ามสองส่วนของ payload ซึ่งมีที่
+ * ตรวจได้ที่เดียวคือตรงนี้ · ปล่อยผ่านแล้วมันจะไปโผล่ตอน `confirmDraft` **หลัง**
+ * `deleteDraft` ไปแล้ว ซึ่งแปลว่าการ์ดหายทั้งที่บิลไม่ได้ลง — กับดักที่
+ * `lib/repo/confirm.ts` เตือนไว้เองในหัวไฟล์
+ */
+describe('parseStoredDraft — รายการต้องอ้างคนที่อยู่บนการ์ดเท่านั้น', () => {
+  const LINES: DraftLine[] = [
+    { name: 'aek', amountSatang: 24350, isNew: false, isPayer: true },
+    { name: 'dear', amountSatang: 24350, isNew: false, isPayer: false },
+  ]
+
+  function stored(items: unknown): unknown {
+    return JSON.parse(JSON.stringify({ draft: { ...ITEMIZED, items }, lines: LINES }))
+  }
+
+  it('ชื่อคนกินที่อยู่ครบบนการ์ด → ผ่าน', () => {
+    expect(parseStoredDraft(stored(ITEMIZED.items))).not.toBeNull()
+  })
+
+  it('ชื่อคนกินที่ไม่มีบนการ์ด → null ตั้งแต่ตอนอ่าน ไม่ใช่ตอน commit', () => {
+    expect(
+      parseStoredDraft(stored([{ name: 'บิงซู', amountSatang: 44000, eaterNames: ['ไม่มีคนนี้'] }])),
+    ).toBeNull()
+  })
+
+  it('ของกลาง (ไม่ติ๊กใครเลย) ยังผ่าน — ไม่ได้อ้างใครจึงไม่มีอะไรให้ผิด', () => {
+    expect(
+      parseStoredDraft(stored([{ name: 'ชาเขียว', amountSatang: 44000, eaterNames: [] }])),
+    ).not.toBeNull()
   })
 })

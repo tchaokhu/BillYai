@@ -138,6 +138,49 @@ export async function createDraft(
   return record
 }
 
+export interface UpdateDraftInput {
+  id: string
+  draft: ExpenseDraft
+  lines: readonly DraftLine[]
+}
+
+/**
+ * เขียนทับ payload ของ draft ใบเดิม — หน้าจอ LIFF เซฟรายการรายชิ้นกลับมา (D57)
+ *
+ * **แตะแค่ `payload`** · `line_user_id` กับ `line_group_id` ไม่อยู่ในคำสั่งเลย
+ * เจ้าของการ์ดจึงเปลี่ยนไม่ได้แม้ผู้เรียกจะอยากให้เปลี่ยน — ด่านสิทธิ์ของ
+ * `/api/liff/*` เทียบกับค่านั้น การให้เขียนได้เท่ากับให้ยึดการ์ดของคนอื่น
+ *
+ * **ไม่ขยับ `created_at`** เพราะมันคือนาฬิกาหมดอายุ · รีเซ็ตทุกครั้งที่แก้แปลว่า
+ * การ์ดที่ถูกแตะเรื่อยๆ ไม่มีวันหมดอายุ ซึ่งล้ม 24 ชั่วโมงของ ADR 0001 ทิ้ง
+ *
+ * คืน `null` เมื่อไม่เจอหรือหมดอายุแล้ว — เงื่อนไขเดียวกับ `findDraft` เพื่อไม่ให้
+ * ของที่อ่านไม่ได้แล้วกลับมาเขียนได้
+ */
+export async function updateDraft(
+  input: UpdateDraftInput,
+  dbOrTx?: Queryable,
+): Promise<DraftRecord | null> {
+  const payload: StoredDraft = { draft: input.draft, lines: [...input.lines] }
+  if (parseStoredDraft(payload) === null) {
+    // ตรวจก่อนเขียน ไม่ใช่ตอนอ่าน — กติกาเดียวกับ `createDraft`
+    throw new Error('draft ไม่ผ่านสัญญาของ payload')
+  }
+
+  const result = await db(dbOrTx).query<DraftRow>(
+    `update expense_draft
+        set payload = $2::jsonb
+      where id = $1 and created_at > now() - ${TTL}
+      returning *`,
+    [input.id, JSON.stringify(payload)],
+  )
+  const row = result.rows[0]
+  if (row === undefined) return null
+  const record = toDraftRecord(row)
+  if (record === null) throw new Error('updateDraft: payload ที่เพิ่งเขียนอ่านกลับไม่ได้')
+  return record
+}
+
 /**
  * อ่าน draft ที่ยังไม่หมดอายุ — คืน `null` ทั้งกรณีไม่เจอ หมดอายุ และอ่าน payload
  * ไม่ออก เพราะทั้งสามกรณีจบเหมือนกันคือ "การ์ดใบนี้ใช้ไม่ได้แล้ว ให้พิมพ์ใหม่"

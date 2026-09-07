@@ -55,6 +55,13 @@ export type ConfirmDraftResult =
   | { kind: 'not-yours' }
   /** ชื่อที่เลือกเป็นของคนอื่นในวงนี้ไปแล้ว — เกิดได้เมื่อมีคนกดตัดหน้าใน 24 ชม. */
   | { kind: 'name-taken'; name: string }
+  /**
+   * ชื่อที่เลือกเป็นอีกแถวในบิลใบนี้อยู่แล้ว — เฉพาะโหมด `itemized`
+   *
+   * ต่างจาก `name-taken` ตรงที่ชื่อนั้น**ยังไม่มีเจ้าของ** ทางออกจึงคนละอย่าง:
+   * ให้เอาชื่อนั้นออกจากบิลก่อน ไม่ใช่ให้ไปเลือกชื่ออื่น
+   */
+  | { kind: 'name-in-bill'; name: string }
   /** ยังไม่รู้ว่าเขาคือใครในวงนี้ และไม่ได้เลือกมาด้วย (D29) */
   | { kind: 'needs-identity' }
   | { kind: 'committed'; expenseId: string; description: string; totalSatang: number }
@@ -105,14 +112,44 @@ export async function confirmDraft(
     // ยังไม่รู้ว่าเขาคือใคร และไม่ได้เลือกมาด้วย — ไม่มีทางรู้ว่าใครเป็นคนจ่าย
     if (input.payer === undefined) return { kind: 'needs-identity' }
 
-    if (existingGroup !== null) {
-      const target =
-        input.payer.kind === 'member'
-          ? await findMemberById(input.payer.memberId, tx)
+    const target =
+      input.payer.kind === 'member'
+        ? await findMemberById(input.payer.memberId, tx)
+        : existingGroup === null
+          ? null
           : await findMemberByName(existingGroup.id, input.payer.displayName, tx)
-      if (target !== null && (target.appUserId !== null || target.groupId !== existingGroup.id)) {
-        return { kind: 'name-taken', name: target.displayName }
-      }
+
+    if (
+      existingGroup !== null &&
+      target !== null &&
+      (target.appUserId !== null || target.groupId !== existingGroup.id)
+    ) {
+      return { kind: 'name-taken', name: target.displayName }
+    }
+
+    /**
+     * **ตัวตนที่เลือกเป็นอีกแถวในบิลใบเดียวกันอยู่แล้ว** — เกิดจริงกับบิลที่แก้มา
+     * จากหน้าจอ LIFF: การ์ดเรียกคนพิมพ์ว่า `คุณ` (ADR 0002) ส่วนชื่อจริงของเขา
+     * ยังลอยอยู่ใน Roster ปุ่ม `+ เพิ่มคน` จึงเสนอชื่อนั้นให้เขาเพิ่มเข้าบิลได้
+     *
+     * สองแถวจะยุบเป็น Member คนเดียวตอนรวมยอด — ซึ่ง**ถูกต้องและตั้งใจ**สำหรับ
+     * บิลที่หารเท่า (`+ ข้าว 1200 กอล์ฟ รวมฉัน` ที่คนพิมพ์ก็ชื่อกอล์ฟ) เพราะยอด
+     * รวมยังเท่าเดิมเป๊ะ · แต่โหมด `itemized` ผูกยอดรายคนไว้กับรายการที่เขากิน
+     * พอจำนวนคนลดลงหนึ่ง ยอดที่แช่ไว้จะอธิบายรายการไม่ได้อีกต่อไป แล้ว
+     * `assertItemsMatchShares` โยนทิ้ง → 500 → LINE ยิง postback เดิมกลับมาไม่รู้จบ
+     * โดยคนกดไม่ได้คำตอบสักครั้ง
+     *
+     * ตอบก่อน `deleteDraft` เสมอ — การ์ดต้องยังอยู่ให้เขากดใหม่ได้
+     */
+    const chosenName =
+      target?.displayName.trim() ??
+      (input.payer.kind === 'new' ? input.payer.displayName.trim() : null)
+    if (
+      draft.draft.mode === 'itemized' &&
+      chosenName !== null &&
+      draft.lines.some((line) => !line.isPayer && line.name.trim() === chosenName)
+    ) {
+      return { kind: 'name-in-bill', name: chosenName }
     }
   }
 
@@ -165,6 +202,14 @@ export async function confirmDraft(
    * `expense_share` คิดจากยอดบิล ไม่ใช่จากจำนวนแถว
    */
   const amountOf = new Map<MemberId, number>()
+  /**
+   * ชื่อบนการ์ด → Member — รายการรายชิ้นอ้างคนด้วยชื่อเดียวกับที่แถวใช้ (D30 ให้
+   * Member เกิดตอนนี้เท่านั้น หน้าจอ LIFF จึงไม่มี `MemberId` ให้ส่งมาแต่แรก)
+   *
+   * คนจ่ายอาจอยู่บนการ์ดในนาม `คุณ` ตอนที่เขายังไม่ claim (ADR 0002) — คีย์จึงมา
+   * จาก `line.name` ไม่ใช่จากชื่อ Member ที่เพิ่งได้มา
+   */
+  const memberOfName = new Map<string, MemberId>()
   for (const line of draft.lines) {
     const memberId = line.isPayer ? payerMemberId : idOf.get(line.name.trim())
     if (memberId === undefined) {
@@ -173,6 +218,47 @@ export async function confirmDraft(
       return { kind: 'gone' }
     }
     amountOf.set(memberId, (amountOf.get(memberId) ?? 0) + line.amountSatang)
+    if (!memberOfName.has(line.name.trim())) memberOfName.set(line.name.trim(), memberId)
+  }
+
+  /**
+   * รายการรายชิ้น → `expense_item` (D51)
+   *
+   * **`eaterNames` ว่าง = ของกลาง กางเป็นทุกคนในบิล** (D53) · กางที่นี่ ไม่ใช่
+   * เก็บแถวที่ไม่มีคนกินลงตาราง เพราะ `expense_item` ที่ไม่มี share เลยคือรายการ
+   * ที่ไม่มีใครจ่าย ซึ่ง `assertItemsMatchShares` ปฏิเสธอยู่แล้ว
+   */
+  const everyone = [...new Set(memberOfName.values())]
+  const items: Array<{ name: string; amountSatang: number; shares: Array<{ memberId: MemberId }> }> =
+    []
+  for (const item of draft.draft.items ?? []) {
+    const memberIds: MemberId[] = []
+    for (const eaterName of item.eaterNames) {
+      const memberId = memberOfName.get(eaterName.trim())
+      if (memberId === undefined) {
+        /**
+         * ชื่อที่ไม่ได้อยู่ในบิล — `itemizedSubtotals` โยนทิ้ง ซึ่งกลายเป็น 500
+         * กลางการกดปุ่ม · ตอบว่าการ์ดใช้ไม่ได้แทน
+         *
+         * **`return` ตรงนี้ commit ไม่ใช่ rollback** — `withTransaction` ม้วนกลับ
+         * เฉพาะตอนที่ `fn` โยน (`lib/db/client.ts`) · `deleteDraft` เกิดไปแล้ว
+         * ข้างบน การ์ดจึงหายไปพร้อมกับคำตอบนี้ ซึ่งเป็นกับดักที่หัวไฟล์นี้เตือนไว้
+         *
+         * ยอมรับได้เพราะ **มาถึงบรรทัดนี้ไม่ได้แล้ว**: `parseStoredDraft` ตรวจว่า
+         * ชื่อคนกินทุกชื่ออยู่ในแถวของการ์ดตั้งแต่ตอนอ่าน payload — draft ที่ผิด
+         * ข้อนี้จึงเขียนลงตารางไม่ได้ตั้งแต่แรก · เก็บไว้เพราะถ้าวันหนึ่งด่านนั้น
+         * ถูกถอด ทางนี้ยังตอบเป็นข้อความ ดีกว่า 500 ที่ LINE ยิงซ้ำไม่รู้จบ
+         */
+        return { kind: 'gone' }
+      }
+      if (!memberIds.includes(memberId)) memberIds.push(memberId)
+    }
+    const eaters = memberIds.length > 0 ? memberIds : everyone
+    items.push({
+      name: item.name,
+      amountSatang: item.amountSatang,
+      shares: eaters.map((memberId) => ({ memberId })),
+    })
   }
 
   const expense = await commitExpense(
@@ -188,6 +274,8 @@ export async function confirmDraft(
       source: 'rule',
       ...(draft.draft.eventTag === undefined ? {} : { eventTag: draft.draft.eventTag }),
       shares: [...amountOf].map(([memberId, amountSatang]) => ({ memberId, amountSatang })),
+      // `assertItems` โยนทั้งสองทิศ — โหมดอื่นต้องไม่มีคีย์นี้เลย ไม่ใช่ array ว่าง
+      ...(items.length === 0 ? {} : { items }),
     },
     tx,
   )

@@ -12,7 +12,7 @@
 import { randomUUID } from 'node:crypto'
 import { afterAll, describe, expect, it } from 'vitest'
 import { closePool, getPool, withTransaction } from '@/lib/db/client'
-import { createDraft, deleteDraft, findDraft, sweepExpiredDrafts } from './drafts'
+import { createDraft, deleteDraft, findDraft, sweepExpiredDrafts, updateDraft } from './drafts'
 import type { DraftLine, ExpenseDraft } from '@/lib/types'
 
 afterAll(async () => {
@@ -257,5 +257,74 @@ describe('findDraft', () => {
       JSON.stringify({ description: 'ข้าว' }),
     ])
     expect(await findDraft(created.id)).toBeNull()
+  })
+})
+
+/**
+ * `updateDraft` — หน้าจอ LIFF เซฟรายการรายชิ้นกลับลง draft ใบเดิม (D57)
+ *
+ * เขียนทับ `payload` อย่างเดียว · **ห้ามขยับ `created_at`** เพราะมันคือนาฬิกา
+ * หมดอายุ: รีเซ็ตทุกครั้งที่แก้แปลว่าการ์ดที่ถูกแตะเรื่อยๆ ไม่มีวันหมดอายุ ทั้งที่
+ * ADR 0001 ตั้ง 24 ชั่วโมงไว้เพื่อไม่ให้ของค้างในตารางตลอดกาล
+ */
+describe('updateDraft — หน้าจอเซฟกลับลง draft ใบเดิม', () => {
+  const ITEMIZED: ExpenseDraft = {
+    description: 'soul bingsu',
+    totalSatang: 44000,
+    mode: 'itemized',
+    participants: [{ name: 'กอล์ฟ', weight: 1 }],
+    includesPayer: true,
+    adjustmentSatang: 4700,
+    items: [{ name: 'บิงซู', amountSatang: 44000, eaterNames: ['กอล์ฟ'] }],
+  }
+  const NEW_LINES: DraftLine[] = [
+    { name: 'กอล์ฟ', amountSatang: 48700, isNew: true, isPayer: false },
+  ]
+
+  it('เขียนทับ payload แล้วอ่านกลับได้ของใหม่', async () => {
+    const created = await createDraft(input())
+    const updated = await updateDraft(
+      { id: created.id, draft: ITEMIZED, lines: NEW_LINES },
+    )
+
+    expect(updated).not.toBeNull()
+    expect(updated?.draft).toEqual(ITEMIZED)
+    expect(updated?.lines).toEqual(NEW_LINES)
+
+    const read = await findDraft(created.id)
+    expect(read?.draft).toEqual(ITEMIZED)
+    expect(read?.lines).toEqual(NEW_LINES)
+  })
+
+  it('ไม่ขยับ `created_at` — นาฬิกาหมดอายุต้องเดินต่อจากตอนการ์ดโผล่', async () => {
+    const created = await createDraft(input())
+    const updated = await updateDraft({ id: created.id, draft: ITEMIZED, lines: NEW_LINES })
+    expect(updated?.createdAt.getTime()).toBe(created.createdAt.getTime())
+  })
+
+  it('ไม่แตะ `line_user_id` / `line_group_id` — เจ้าของการ์ดเปลี่ยนไม่ได้', async () => {
+    const created = await createDraft(input())
+    const updated = await updateDraft({ id: created.id, draft: ITEMIZED, lines: NEW_LINES })
+    expect(updated?.lineUserId).toBe(created.lineUserId)
+    expect(updated?.lineGroupId).toBe(created.lineGroupId)
+  })
+
+  it('draft ที่ไม่มีอยู่ → null ไม่ throw', async () => {
+    expect(
+      await updateDraft({ id: randomUUID(), draft: ITEMIZED, lines: NEW_LINES }),
+    ).toBeNull()
+  })
+
+  it('payload ที่ผิดสัญญาเขียนไม่ได้เลย — ตรวจก่อนเขียน เหมือน `createDraft`', async () => {
+    const created = await createDraft(input())
+    await expect(
+      updateDraft({
+        id: created.id,
+        draft: { ...ITEMIZED, items: [{ name: 'บิงซู', amountSatang: 1, eaterNames: [] }] },
+        lines: NEW_LINES,
+      }),
+    ).rejects.toThrow('draft ไม่ผ่านสัญญาของ payload')
+    // ของเดิมต้องยังอยู่ครบ ไม่ใช่ถูกเขียนทับครึ่งทาง
+    expect((await findDraft(created.id))?.draft.description).toBe('ข้าว')
   })
 })
