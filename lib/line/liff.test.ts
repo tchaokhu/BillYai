@@ -70,34 +70,74 @@ describe('verifyLiffIdToken — ทางที่ต้องปฏิเสธ
     // request พัง คนที่เปิดหน้าเว็บต้องได้คำตอบ ไม่ใช่หน้าขาว
     // **body เป็น payload ที่ครบทุกอย่าง** — ถ้าไม่ดูสถานะ โค้ดจะรับ token ที่ LINE
     // เพิ่งบอกว่าใช้ไม่ได้ · proxy ที่คั่นกลางส่ง body แปลกๆ พร้อมสถานะ error ได้จริง
-    expect(await verify(payload(), 400)).toEqual({ ok: false })
-    expect(await verify({ error: 'invalid_request' }, 400)).toEqual({ ok: false })
+    expect(await verify(payload(), 400)).toEqual({ ok: false, reason: 'rejected' })
+    expect(await verify({ error: 'invalid_request' }, 400)).toEqual({ ok: false, reason: 'rejected' })
   })
 
   it('`aud` ไม่ใช่ Channel ID ของเรา → ปฏิเสธ', async () => {
     // LINE ตรวจให้แล้วเมื่อส่ง `client_id` ถูก · ด่านนี้กันกรณีที่เราส่ง client_id
     // ผิดเอง ซึ่งจะกลายเป็นการรับ token ของ channel อื่นมาเป็นตัวตนในระบบเรา
-    expect(await verify(payload({ aud: '9999999999' }))).toEqual({ ok: false })
+    expect(await verify(payload({ aud: '9999999999' }))).toEqual({ ok: false, reason: 'rejected' })
   })
 
   it('`iss` ไม่ใช่ของ LINE → ปฏิเสธ', async () => {
-    expect(await verify(payload({ iss: 'https://evil.example.com' }))).toEqual({ ok: false })
+    expect(await verify(payload({ iss: 'https://evil.example.com' }))).toEqual({ ok: false, reason: 'rejected' })
   })
 
   it('token หมดอายุแล้ว → ปฏิเสธ', async () => {
     expect(await verify(payload({ exp: Math.floor(Date.now() / 1000) - 1 }))).toEqual({
       ok: false,
+      reason: 'rejected',
     })
   })
 
   it('ไม่มี `sub` → ปฏิเสธ', async () => {
-    expect(await verify(payload({ sub: undefined }))).toEqual({ ok: false })
+    expect(await verify(payload({ sub: undefined }))).toEqual({ ok: false, reason: 'rejected' })
   })
 
   it('body ที่ไม่ใช่ JSON → ปฏิเสธ ไม่ throw', async () => {
     const fetchImpl = async () => new Response('<html>gateway error</html>', { status: 200 })
     expect(
       await verifyLiffIdToken({ idToken: 'a.b.c', channelId: CHANNEL_ID, fetch: fetchImpl }),
-    ).toEqual({ ok: false })
+    ).toEqual({ ok: false, reason: 'rejected' })
+  })
+})
+
+describe('verifyLiffIdToken — LINE ตอบไม่ได้ ไม่ใช่ token ผิด', () => {
+  /**
+   * แยก `unreachable` ออกจาก `rejected` เพราะปลายทางต่างกันคนละเรื่อง: token ผิด
+   * = ให้เขากดจากการ์ดใหม่ · LINE ล่ม = ให้ลองใหม่ทีหลัง · ยุบเป็นอันเดียวแปลว่า
+   * ตอนเน็ตขาดเราจะบอกผู้ใช้ว่าเซสชันหมดอายุ ซึ่งทำให้เขาไปกดวนอยู่อย่างนั้น
+   */
+  it('fetch โยน (DNS/TLS/เน็ตขาด) → unreachable ไม่ใช่ rejected', async () => {
+    const result = await verifyLiffIdToken({
+      idToken: 'a.b.c',
+      channelId: CHANNEL_ID,
+      fetch: async () => {
+        throw new TypeError('fetch failed')
+      },
+    })
+    expect(result).toEqual({ ok: false, reason: 'unreachable' })
+  })
+
+  it('ตั้ง timeout ให้ทุกครั้ง — invocation ที่ค้างรอ LINE คือ invocation ที่ไม่มีวันจบ', async () => {
+    const { fetchImpl, seen } = stub(payload())
+    await verifyLiffIdToken({ idToken: 'a.b.c', channelId: CHANNEL_ID, fetch: fetchImpl })
+    expect(seen.init?.signal).toBeInstanceOf(AbortSignal)
+  })
+
+  it('timeout ที่หมดเวลา → unreachable', async () => {
+    const result = await verifyLiffIdToken({
+      idToken: 'a.b.c',
+      channelId: CHANNEL_ID,
+      timeoutMs: 1,
+      fetch: async (_url, init) =>
+        new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => {
+            reject(new DOMException('aborted', 'TimeoutError'))
+          })
+        }),
+    })
+    expect(result).toEqual({ ok: false, reason: 'unreachable' })
   })
 })

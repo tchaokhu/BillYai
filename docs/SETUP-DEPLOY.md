@@ -265,6 +265,60 @@ Login channel — ต้องเพิ่ม env อีกตัวตอนท
 
 ได้ **LIFF ID** มาแล้ว → เอาไปใส่ `NEXT_PUBLIC_LIFF_ID` บน Vercel → **redeploy**
 
+### 4.1 LIFF app ใบที่สองสำหรับ dev (M9)
+
+หน้าจอจริงอยู่ที่ `/liff` ไม่ใช่ `/liff/spike` และ preview ของ branch `dev` เป็นคนละโดเมนกับ
+production — LIFF app หนึ่งใบชี้ endpoint ได้ URL เดียว จึงต้องมีใบที่สอง
+
+สร้างใน **Login channel เดิม** (อย่าสร้าง Login channel ใหม่ — เหตุผลเรื่อง `userId` ผูกกับ
+provider อยู่ในกรอบข้างบน แต่ข้อนี้แรงกว่านั้น: `aud` ของ ID token คือ channel ID และเรามี
+env ให้ใส่ค่าเดียว)
+
+| ช่อง | ค่า |
+|---|---|
+| LIFF app name | `billyai-dev` |
+| Size | `Tall` |
+| Endpoint URL | `https://bill-yai-git-dev-<scope>.vercel.app/liff` |
+| Scopes | ติ๊ก `profile`, `openid`, **`chat_message.write`** |
+
+แล้วตั้ง env สองตัวบน Vercel **environment `Preview`** (ของ production ตั้งทีหลังตอนจะปล่อย):
+
+| env | เอามาจากไหน | หน้าตา |
+|---|---|---|
+| `NEXT_PUBLIC_LIFF_ID` | แท็บ `LIFF` → คอลัมน์ LIFF ID | `1234567890-AbCdEfGh` |
+| `LINE_LOGIN_CHANNEL_ID` | แท็บ `Basic settings` → Channel ID | `1234567890` (ตัวเลขล้วน) |
+
+> **สองค่านี้ขึ้นต้นด้วยเลขชุดเดียวกันเป๊ะ ต่างกันแค่ `-suffix`** และอยู่คนละแท็บห่างกันสองคลิก
+> — สลับกันคือความผิดพลาดที่เกิดบ่อยที่สุดตรงนี้
+>
+> ใส่ LIFF ID ลง `LINE_LOGIN_CHANNEL_ID` → `readLoginChannelId` ตีเป็นค่าว่าง → ทุกคนได้
+> **500 `ระบบยังตั้งค่าไม่ครบ`** และ log ขึ้น `LINE_LOGIN_CHANNEL_ID ไม่ได้ตั้ง`
+>
+> ใส่ Channel ID ลง `NEXT_PUBLIC_LIFF_ID` → `liff.init()` พัง → หน้าจอขึ้น
+> **`เปิดจากในแอป LINE ไม่ได้`**
+
+**ตั้ง env แล้วต้อง Redeploy เสมอ** — env ถูกผูกกับ deployment ตอน deploy ไม่ได้อ่านตอนรัน
+และ `NEXT_PUBLIC_*` ถูกฝังลงใน bundle ตอน build ด้วย · ไม่ Redeploy = ค่าใหม่ไม่มีผลอะไรเลย
+และอาการที่เห็นคือ "แก้แล้วแต่ยังพังเหมือนเดิม" ซึ่งไล่ผิดทางได้ง่ายมาก
+
+### 4.2 กับดัก: Login channel สถานะ `Developing` เปิดได้เฉพาะคนในทีม
+
+Login channel ที่เพิ่งสร้างมีสถานะ **`Developing`** และเอกสาร LINE ระบุว่าสถานะนี้
+**เฉพาะคนที่มี role `Admin` หรือ `Tester` บน channel นั้นเท่านั้นที่เปิด LIFF ได้** · คนอื่น
+กดปุ่มแล้วได้หน้า error ของ LINE ไม่ใช่หน้าเรา — ซึ่งแยกไม่ออกจาก "เว็บเราพัง" ถ้าไม่รู้ข้อนี้
+
+**อย่าเพิ่งกด `Published`** — เอกสารระบุว่า **เปลี่ยนแล้วย้อนกลับไม่ได้** และมันคือการเปิดให้
+คนทั้งโลกล็อกอินเข้า channel นี้ได้ ซึ่งไม่ใช่สิ่งที่ต้องการระหว่างที่ยังเทสต์กันเองอยู่
+
+ให้เพิ่มคนที่จะเทสต์เป็น role แทน:
+
+```
+Console → Login channel → แท็บ Roles → Add
+```
+
+คนที่จะถูกเพิ่มต้อง **ผูก LINE account เข้ากับ developer account ของตัวเองก่อน** ไม่งั้นค้นชื่อ
+เขาไม่เจอในหน้านั้น
+
 ---
 
 ## 5. รัน S4 — cold start
