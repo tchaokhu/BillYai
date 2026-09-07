@@ -87,8 +87,34 @@ export interface DraftParticipant {
   weight: number
 }
 
+/**
+ * หนึ่งรายการบนใบเสร็จ ตอนที่ยังเป็น draft — **ชื่อคน ยังไม่ใช่ `MemberId`**
+ *
+ * Member เกิดตอนกดยืนยันเท่านั้น (D30) รายการที่หน้าจอ LIFF เซฟกลับมาจึงอ้างคน
+ * ได้ด้วยชื่อเท่านั้น เหมือน `DraftLine` · การแปลงเป็น `MemberId` เกิดใน
+ * `confirmDraft` ที่เดียว
+ */
+export interface DraftItem {
+  name: string
+  amountSatang: number
+  /**
+   * ใครกินชิ้นนี้ — **ว่างแปลว่าของกลาง หารกับทุกคนในบิล** (D53)
+   *
+   * ข้าวเปล่า น้ำแข็ง ของกลางคือกรณีปกติของโต๊ะอาหาร ไม่ใช่ edge case · การกาง
+   * ชื่อทุกคนใส่ไว้แทนจะทำให้ "ของกลาง" กับ "บังเอิญทุกคนกิน" แยกกันไม่ออก และ
+   * เพิ่มคนเข้าบิลทีหลังจะไม่ขยับรายการนั้นตามอย่างที่ควร
+   */
+  eaterNames: string[]
+}
+
 export interface ExpenseDraft {
   description: string
+  /**
+   * **ผลรวมรายชิ้น ยอดก่อนบวกส่วนปรับ** — ตรงกับ `SplitInput.totalSatang` และ
+   * `CommitExpenseInput.totalSatang` · ยอดที่จ่ายจริงคือ `totalSatang +
+   * adjustmentSatang` เสมอ · บิลที่พิมพ์ในแชทมี `adjustmentSatang: 0` ค่านี้จึง
+   * เท่ากับยอดที่พิมพ์พอดี
+   */
   totalSatang: number
   eventTag?: string
   mode: SplitMode
@@ -97,6 +123,8 @@ export interface ExpenseDraft {
   includesPayer: boolean
   /** ส่วนปรับท้ายบิลเป็นสตางค์ ติดลบได้ (D50/D54) */
   adjustmentSatang: number
+  /** โหมด `itemized` เท่านั้น — ผลรวมต้องเท่า `totalSatang` เป๊ะ */
+  items?: DraftItem[]
 }
 
 /**

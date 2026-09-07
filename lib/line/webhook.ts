@@ -75,10 +75,19 @@ export type ConfirmOutcome =
   | { kind: 'gone' }
   | { kind: 'not-yours' }
   | { kind: 'name-taken'; name: string }
+  | { kind: 'name-in-bill'; name: string }
   | { kind: 'needs-identity' }
 
 export interface LineWebhookDeps {
   reply: (replyToken: string, messages: readonly LineMessage[]) => Promise<ReplyOutcome>
+  /**
+   * `https://liff.line.me/<liffId>` สำหรับปุ่ม `จดรายชิ้น` บนการ์ด Draft (D56)
+   *
+   * **`null` = ยังไม่ได้ตั้ง `NEXT_PUBLIC_LIFF_ID` แล้วการ์ดไม่มีปุ่มนั้น** —
+   * ไม่ใช่เหตุให้บอทเงียบ · การจดบิลในแชทเป็นเส้นทางหลักซึ่งไม่ได้พึ่ง LIFF เลย
+   * (ต่างจาก `LINE_CHANNEL_ACCESS_TOKEN` ที่หายแล้วบอทตอบอะไรไม่ได้ทั้งหมด)
+   */
+  liffUrl?: string | null
   loadGroupView: (lineGroupId: string | null, lineUserId: string) => Promise<GroupView>
   /** คืน id ของ draft ที่เพิ่งเขียน — ใช้เป็น postback data */
   saveDraft: (input: SaveDraftInput) => Promise<string>
@@ -215,7 +224,15 @@ async function messagesFor(event: LineEvent, deps: LineWebhookDeps): Promise<Lin
     spentAt: bangkokDate(event.timestamp),
   })
   // ยังไม่รู้ว่าเขาคือใคร = การ์ดมีแถวเลือกตัวตนแทนปุ่มยืนยัน (D29 / ADR 0002)
-  return [draftCardMessage(outcome.card, draftId, view.payerName === null ? view.unclaimed : null)]
+  return [
+    draftCardMessage(
+      outcome.card,
+      draftId,
+      // ยังไม่รู้ว่าเขาคือใคร = การ์ดมีแถวเลือกตัวตนแทนปุ่มยืนยัน (D29 / ADR 0002)
+      view.payerName === null ? view.unclaimed : null,
+      deps.liffUrl ?? null,
+    ),
+  ]
 }
 
 /**
@@ -311,6 +328,8 @@ async function messagesForPostback(
       return []
     case 'name-taken':
       return renderReply({ kind: 'name-taken', name: outcome.name }, surface)
+    case 'name-in-bill':
+      return renderReply({ kind: 'name-in-bill', name: outcome.name }, surface)
     case 'needs-identity':
       return renderReply({ kind: 'needs-identity' }, surface)
   }

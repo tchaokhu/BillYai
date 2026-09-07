@@ -30,6 +30,14 @@ export const dynamic = 'force-dynamic'
  * route segment ถูก deprecate ใน Next 16 แล้ว
  */
 
+/** `1234567890-AbCdEfGh` → `https://liff.line.me/1234567890-AbCdEfGh` */
+function liffUrl(raw: string | undefined): string | null {
+  const liffId = (raw ?? '').trim()
+  // รูปของ LIFF ID คือ `<channelId ตัวเลข>-<suffix>` — ค่าที่ผิดรูปคือลิงก์เสีย
+  // บนการ์ดในกลุ่ม ซึ่งแย่กว่าการ์ดที่ไม่มีปุ่มนั้น
+  return /^[0-9]+-[A-Za-z0-9]+$/.test(liffId) ? `https://liff.line.me/${liffId}` : null
+}
+
 export async function POST(request: Request): Promise<Response> {
   const { secret: channelSecret, hadSurroundingWhitespace } = readChannelSecret(
     process.env.LINE_CHANNEL_SECRET,
@@ -67,6 +75,13 @@ export async function POST(request: Request): Promise<Response> {
       retryKey: request.headers.get('x-line-retry-key'),
     },
     {
+      /**
+       * ปุ่ม `จดรายชิ้น` บนการ์ด Draft (D56) — `NEXT_PUBLIC_LIFF_ID` เป็นค่า
+       * สาธารณะโดยตั้งใจ (มันถูกฝังลง bundle ของหน้าเว็บอยู่แล้ว) จึงไม่ต้องมี
+       * env ตัวที่สองสำหรับฝั่ง server · ไม่ได้ตั้ง = การ์ดไม่มีปุ่มนั้น ไม่ใช่
+       * บอทพัง
+       */
+      liffUrl: liffUrl(process.env.NEXT_PUBLIC_LIFF_ID),
       reply: async (replyToken, messages) =>
         canReply
           ? replyToLine({ replyToken, messages, accessToken }, { fetch })

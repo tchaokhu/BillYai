@@ -12,6 +12,7 @@ import { afterAll, describe, expect, it } from 'vitest'
 import { closePool, getPool } from '@/lib/db/client'
 import { confirmDraft } from './confirm'
 import { createDraft, findDraft } from './drafts'
+import { findExpenseById } from './expenses'
 import { findActiveGroupByLineGroupId } from './groups'
 import { claimMember, ensureMember, listMembers } from './members'
 import { makeGroup } from '@/lib/db/fixtures'
@@ -453,5 +454,140 @@ describe('confirmDraft — ทางที่ล้มเหลวต้อง�
       payer: { kind: 'member', memberId: stray.id },
     })
     expect(result).toEqual({ kind: 'gone' })
+  })
+})
+
+/**
+ * บิล itemized ที่มาจากหน้าจอ LIFF — **รายการต้องลง `expense_item` ด้วย**
+ * ไม่ใช่แค่ยอดรายคน · ไม่งั้นการ์ดรายละเอียด (D51) ไม่มีอะไรจะโชว์ และคำถาม
+ * "ใครกินอะไร" ตอบไม่ได้ทั้งที่คนอุตส่าห์ติ๊กมาแล้ว
+ */
+describe('confirmDraft — บิล itemized จากหน้าจอ LIFF', () => {
+  const ITEM_DRAFT: ExpenseDraft = {
+    description: 'soul bingsu',
+    // ผลรวมรายชิ้น — ยอดที่จ่ายจริงคือ 44000 + 4700
+    totalSatang: 44000,
+    mode: 'itemized',
+    participants: [
+      { name: 'กอล์ฟ', weight: 1 },
+      { name: 'ตูน', weight: 1 },
+    ],
+    includesPayer: true,
+    adjustmentSatang: 4700,
+    items: [
+      { name: 'บิงซู', amountSatang: 20000, eaterNames: ['กอล์ฟ'] },
+      { name: 'โทสต์', amountSatang: 20000, eaterNames: ['ตูน'] },
+      // ไม่ติ๊กใครเลย = ของกลาง หารทุกคนในบิล (D53)
+      { name: 'ชาเขียว', amountSatang: 4000, eaterNames: [] },
+    ],
+  }
+
+  /**
+   * ยอดที่แช่ไว้ตอนสร้าง draft — คิดจาก 48700 ตามสัดส่วน subtotal
+   * กอล์ฟ 20000+2000=22000 · ตูน 20000+2000=22000 → คนละ 24350
+   */
+  const ITEM_LINES: DraftLine[] = [
+    { name: 'กอล์ฟ', amountSatang: 24350, isNew: true, isPayer: true },
+    { name: 'ตูน', amountSatang: 24350, isNew: true, isPayer: false },
+  ]
+
+  it('รายการลง `expense_item` พร้อมคนกิน และของกลางกางเป็นทุกคนในบิล', async () => {
+    const lineUserId = fakeLineUserId()
+    const draft = await makeDraft({ lineUserId, draft: ITEM_DRAFT, lines: ITEM_LINES })
+
+    const result = await confirmDraft({
+      draftId: draft.id,
+      lineUserId,
+      payer: { kind: 'new', displayName: 'กอล์ฟ' },
+    })
+    expect(result.kind).toBe('committed')
+    if (result.kind !== 'committed') return
+
+    const detail = await findExpenseById(result.expenseId)
+    expect(detail).not.toBeNull()
+    if (detail === null) return
+
+    expect(detail.expense.totalSatang).toBe(44000)
+    expect(detail.expense.adjustmentSatang).toBe(4700)
+
+    const byName = new Map(
+      detail.items.map((entry) => [entry.item.name, entry.shares.length] as const),
+    )
+    expect(byName.get('บิงซู')).toBe(1)
+    expect(byName.get('โทสต์')).toBe(1)
+    // ของกลางกางเป็นทุกคนในบิล ไม่ใช่แถวที่ไม่มีคนกิน
+    expect(byName.get('ชาเขียว')).toBe(2)
+
+    expect(await sharesOf(result.expenseId)).toEqual([
+      { display_name: 'กอล์ฟ', amount_satang: 24350 },
+      { display_name: 'ตูน', amount_satang: 24350 },
+    ])
+  })
+
+  /**
+   * **คนพิมพ์ที่ยังไม่ claim เพิ่มชื่อจริงของตัวเองเข้าบิลจากหน้าจอ**
+   *
+   * การ์ดเรียกเขาว่า `คุณ` (ADR 0002) ส่วนชื่อจริงของเขายังลอยอยู่ใน Roster ปุ่ม
+   * `+ เพิ่มคน` จึงเสนอชื่อนั้นให้ · พอกดยืนยันแล้วเลือกชื่อนั้นเป็นตัวตน สองแถว
+   * ยุบเป็น Member คนเดียว ยอดรายคนที่แช่ไว้จึงอธิบายรายการไม่ได้อีกต่อไป และ
+   * `assertItemsMatchShares` โยนทิ้ง → 500 → LINE ยิง postback เดิมกลับมาไม่รู้จบ
+   *
+   * ต้องตอบให้เขารู้ตัว **ก่อน** ลบ draft ไม่ใช่ปล่อยให้พังแล้วเงียบ
+   */
+  it('คนพิมพ์เลือกตัวตนเป็นชื่อที่อยู่ในบิลอยู่แล้ว → บอกว่าชื่อชน ไม่ใช่ 500', async () => {
+    const lineGroupId = fakeLineGroupId()
+    const lineUserId = fakeLineUserId()
+
+    // วงมีอยู่แล้วและมี `กอล์ฟ` ที่ยังไม่มีเจ้าของ
+    const seed = await makeDraft({ lineGroupId, lineUserId: fakeLineUserId() })
+    await confirmDraft({
+      draftId: seed.id,
+      lineUserId: seed.lineUserId,
+      payer: { kind: 'new', displayName: 'เบียร์' },
+    })
+
+    // คนพิมพ์คนใหม่ ยังไม่ claim — การ์ดเรียกเขาว่า `คุณ` และเขาเพิ่ม `กอล์ฟ` เข้าบิล
+    const draft = await makeDraft({
+      lineGroupId,
+      lineUserId,
+      draft: {
+        ...ITEM_DRAFT,
+        totalSatang: 30000,
+        adjustmentSatang: 0,
+        participants: [
+          { name: 'กอล์ฟ', weight: 1 },
+          { name: 'ตูน', weight: 1 },
+        ],
+        items: [{ name: 'บิงซู', amountSatang: 30000, eaterNames: ['คุณ', 'กอล์ฟ', 'ตูน'] }],
+      },
+      // สามคนหาร 300 คนละ 100 — พอ `คุณ` กับ `กอล์ฟ` ยุบเป็นคนเดียวจะเหลือสองคน
+      // ที่ถือ 200/100 ทั้งที่รายการเดียวกันหารสองต้องได้ 150/150
+      lines: [
+        { name: 'คุณ', amountSatang: 10000, isNew: false, isPayer: true },
+        { name: 'กอล์ฟ', amountSatang: 10000, isNew: false, isPayer: false },
+        { name: 'ตูน', amountSatang: 10000, isNew: false, isPayer: false },
+      ],
+    })
+
+    const result = await confirmDraft({
+      draftId: draft.id,
+      lineUserId,
+      payer: { kind: 'new', displayName: 'กอล์ฟ' },
+    })
+    expect(result.kind).toBe('name-in-bill')
+    // ยังไม่ได้ลบอะไร — เขากลับไปเอาชื่อนั้นออกจากบิลแล้วกดใหม่ได้
+    expect(await findDraft(draft.id)).not.toBeNull()
+  })
+
+  it('รายการที่อ้างชื่อนอกบิลเขียนลงตารางไม่ได้เลย — กันไว้ก่อนถึงปุ่มยืนยัน', async () => {
+    await expect(
+      makeDraft({
+        draft: {
+          ...ITEM_DRAFT,
+          items: [{ name: 'บิงซู', amountSatang: 44000, eaterNames: ['คนที่ไม่ได้อยู่ในบิล'] }],
+        },
+        lines: ITEM_LINES,
+      }),
+    ).rejects.toThrow('draft ไม่ผ่านสัญญาของ payload')
   })
 })

@@ -51,11 +51,25 @@ type FlexBox = {
 
 type FlexSeparator = { type: 'separator'; margin?: 'sm' | 'md' | 'lg' }
 
+/**
+ * ปุ่มเปิดลิงก์ — LIFF URL เท่านั้นในวันนี้
+ *
+ * แยกจาก `FlexPostbackAction` เพราะสองอย่างนี้เดินคนละทาง: postback กลับมาที่
+ * webhook ของเรา ส่วน uri พา LINE ไปเปิดหน้าเว็บ · และ **เอกสาร LINE ระบุว่า
+ * ข้อความที่ผู้ใช้ส่งเองด้วย `liff.sendMessages()` ตั้งได้เฉพาะ uri action**
+ * ซึ่งเป็นข้อจำกัดที่จะสำคัญเมื่อถึง Phase 2
+ */
+type FlexUriAction = {
+  type: 'uri'
+  label: string
+  uri: string
+}
+
 type FlexButton = {
   type: 'button'
-  style: 'primary'
+  style: 'primary' | 'secondary'
   height: 'sm'
-  action: FlexPostbackAction
+  action: FlexPostbackAction | FlexUriAction
 }
 
 type FlexComponent = FlexText | FlexBox | FlexSeparator | FlexButton
@@ -409,10 +423,16 @@ export interface IdentityChoice {
  * @param unclaimed Member ที่ยังไม่มีเจ้าของ · `null` = คนพิมพ์ยืนยันตัวตนไปแล้ว
  *   จึงไม่ต้องถาม และการ์ดมีปุ่ม `ยืนยัน` ตามปกติ
  */
+/**
+ * @param liffUrl `https://liff.line.me/<liffId>` · `null` = ยังไม่ได้ตั้ง
+ *   `NEXT_PUBLIC_LIFF_ID` แล้วการ์ดจะไม่มีปุ่มจดรายชิ้นเลย ซึ่งดีกว่าปุ่มที่กด
+ *   แล้วพา LINE ไปเปิดลิงก์เสีย
+ */
 export function draftCardMessage(
   card: DraftCard,
   draftId: string,
   unclaimed: readonly IdentityChoice[] | null = null,
+  liffUrl: string | null = null,
 ): LineFlexMessage {
   const description = shorten(card.description, MAX_DESCRIPTION)
   const header: FlexComponent[] = [
@@ -443,6 +463,31 @@ export function draftCardMessage(
    * ปล่อยให้มีจะกลายเป็นทางตัน: กดแล้วเราไม่รู้ว่าจะบันทึกว่าใครจ่าย แล้วต้องตอบ
    * ให้ไปกดปุ่มอื่นแทน ซึ่งเป็นการเพิ่มรอบให้กับสิ่งที่ ADR 0002 ตั้งใจให้จบในกดเดียว
    */
+  /**
+   * ปุ่มเปิดหน้าจอจดรายชิ้น (D56) — **URI action ไม่ใช่ postback** เพราะมันคือ
+   * ลิงก์ LIFF ธรรมดา · อยู่ทั้งบนการ์ดที่มีปุ่มยืนยันและการ์ดที่ยังไม่มี เพราะ
+   * ตัวตนถูกถามตอนกดยืนยัน ไม่ใช่ตอนแก้รายการ (ADR 0002)
+   *
+   * สิทธิ์ไม่ได้อยู่ที่ปุ่ม — ใครกดก็เปิดได้ แล้ว `/api/liff/session` ตอบ 403 ให้
+   * คนที่ไม่ใช่คนพิมพ์ (D26) · ซ่อนปุ่มตามคนดูทำไม่ได้อยู่แล้ว การ์ดใบเดียวถูก
+   * ส่งเข้ากลุ่มให้ทุกคนเห็นเหมือนกันหมด
+   */
+  const itemizeButton: FlexComponent[] =
+    liffUrl === null
+      ? []
+      : [
+          {
+            type: 'button',
+            style: 'secondary',
+            height: 'sm',
+            action: {
+              type: 'uri',
+              label: 'จดรายชิ้น',
+              uri: `${liffUrl}?draftId=${draftId}`,
+            },
+          },
+        ]
+
   const footer: FlexBox =
     unclaimed === null
       ? {
@@ -463,11 +508,13 @@ export function draftCardMessage(
                 displayText: 'ยืนยัน',
               },
             },
+            ...itemizeButton,
           ],
         }
       : {
           type: 'box',
           layout: 'vertical',
+          spacing: 'sm',
           contents: [
             {
               type: 'text',
@@ -476,6 +523,7 @@ export function draftCardMessage(
               color: '#8c8c8c',
               wrap: true,
             },
+            ...itemizeButton,
           ],
         }
 

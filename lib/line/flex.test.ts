@@ -100,6 +100,75 @@ describe('draftCardMessage — สิ่งที่คนต้องเห็�
   })
 })
 
+/**
+ * ปุ่มเปิดหน้าจอจดรายชิ้น (D56) — **URI action ไม่ใช่ postback**
+ *
+ * LIFF URL เป็นลิงก์ธรรมดา · `draftId` เดินทางไปทาง query string เพราะหน้าจอต้อง
+ * รู้ว่าจะเปิดบิลใบไหน และเป็นค่าที่ฝั่ง server ตรวจสิทธิ์ซ้ำอยู่แล้ว (D26)
+ */
+describe('draftCardMessage — ปุ่มเปิดหน้าจอจดรายชิ้น', () => {
+  const LIFF_URL = 'https://liff.line.me/1234567890-AbCdEfGh'
+
+  function uris(message: unknown): string[] {
+    const found: string[] = []
+    const walk = (node: unknown): void => {
+      if (Array.isArray(node)) {
+        node.forEach(walk)
+        return
+      }
+      if (typeof node !== 'object' || node === null) return
+      const record = node as Record<string, unknown>
+      if (record.type === 'uri' && typeof record.uri === 'string') found.push(record.uri)
+      Object.values(record).forEach(walk)
+    }
+    walk(message)
+    return found
+  }
+
+  it('มีปุ่มที่พา `draftId` ไปเปิดหน้าจอ', () => {
+    const message = draftCardMessage(CARD, DRAFT_ID, null, LIFF_URL)
+    expect(uris(message)).toContain(`${LIFF_URL}?draftId=${DRAFT_ID}`)
+  })
+
+  /**
+   * ยังไม่ได้ตั้ง `NEXT_PUBLIC_LIFF_ID` = **ไม่มีปุ่ม ไม่ใช่ปุ่มที่กดแล้วพัง** ·
+   * ลิงก์เสียบนการ์ดในกลุ่มแย่กว่าการ์ดที่ไม่มีปุ่มนั้น
+   */
+  it('ไม่ได้ตั้ง LIFF URL → ไม่มีปุ่มนั้นเลย และการ์ดยังใช้ได้ตามปกติ', () => {
+    const message = draftCardMessage(CARD, DRAFT_ID)
+    expect(uris(message)).toEqual([])
+    expect(findPostbackData(message)).toBe(`confirm=${DRAFT_ID}`)
+  })
+
+  /**
+   * คนที่ยังไม่ยืนยันตัวตนไม่มีปุ่ม `ยืนยัน` (ADR 0002) — **แต่ยังจดรายชิ้นได้**
+   * ตัวตนถูกถามตอนกดยืนยัน ไม่ใช่ตอนแก้รายการ
+   */
+  it('การ์ดของคนที่ยังไม่ยืนยันตัวตนก็มีปุ่มนี้', () => {
+    const message = draftCardMessage(CARD, DRAFT_ID, choices('กอล์ฟ'), LIFF_URL)
+    expect(uris(message)).toContain(`${LIFF_URL}?draftId=${DRAFT_ID}`)
+  })
+
+  it('ทุก bubble ของ carousel มีปุ่มนี้ เหมือนปุ่มยืนยัน', () => {
+    const big: DraftCard = {
+      description: 'ทริปเชียงใหม่',
+      totalSatang: 500000,
+      lines: Array.from({ length: 90 }, (_, i) => ({
+        name: `เพื่อนหมายเลข ${i}`,
+        amountSatang: 5555,
+        isNew: false,
+        isPayer: false,
+      })),
+    }
+    const message = draftCardMessage(big, DRAFT_ID, null, LIFF_URL)
+    const bubbles = bubblesOf(message)
+    expect(bubbles.length).toBeGreaterThan(1)
+    for (const bubble of bubbles) {
+      expect(uris(bubble)).toContain(`${LIFF_URL}?draftId=${DRAFT_ID}`)
+    }
+  })
+})
+
 describe('draftCardMessage — วงที่ใหญ่เกินหนึ่ง bubble (D52)', () => {
   const BIG: DraftCard = {
     description: 'ทริปเชียงใหม่',
