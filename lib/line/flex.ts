@@ -688,7 +688,15 @@ function paginate(header: FlexComponent[], rows: FlexComponent[]): FlexBubble[] 
     if (!hasRow) return null
     bubbles.push(bubbleOf(current))
     if (bubbles.length >= MAX_CAROUSEL_BUBBLES) return null
-    current = [row]
+    /**
+     * **หัวการ์ดขึ้นใบใหม่ด้วยเสมอ** — ทุก call site เขียนไว้ตรงกันว่าหัวการ์ดซ้ำ
+     * ทุกใบโดยตั้งใจ · ใบที่ไม่มีหัวคือรายชื่อกับตัวเลขลอยๆ ที่ไม่บอกว่าของบิลไหน
+     */
+    current = [...header, row]
+    // หัวการ์ดกินที่ไปด้วย — แถวที่ใส่ใบเดิมไม่ลง อาจใส่ใบใหม่ไม่ลงเหมือนกัน
+    if (Buffer.byteLength(JSON.stringify(bubbleOf(current)), 'utf8') > MAX_BUBBLE_BYTES) {
+      return null
+    }
     hasRow = true
   }
   if (hasRow) bubbles.push(bubbleOf(current))
@@ -796,7 +804,10 @@ export function billDetailCardMessage(detail: {
    * แล้วเจอตัวเลขลอยๆ ที่ไม่รู้ว่าของบิลไหนคือการ์ดที่อ่านไม่ได้
    */
   const pages = paginate(header, [
-    ...itemRows.map((r) => r),
+    ...itemRows,
+    // ทาง bubble เดี่ยวคั่นสองส่วนไว้ — ทางนี้ต้องคั่นด้วย ไม่งั้นแถวรายการกับ
+    // แถวรายคนไหลติดกันเป็นกองเดียว (D51 ให้สองส่วนตอบคนละคำถาม)
+    ...(itemRows.length > 0 ? [{ type: 'separator', margin: 'md' } as FlexComponent] : []),
     ...detail.lines.map((line) => row(shorten(line.name, MAX_NAME), line.amountSatang)),
   ])
   if (pages !== null) {

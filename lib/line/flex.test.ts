@@ -38,6 +38,15 @@ function footerOf(message: unknown): unknown {
     : undefined
 }
 
+/** นับ separator ทั้งโครง — ใช้ตรวจว่าเส้นคั่นระหว่างสองส่วนยังอยู่ */
+function countSeparators(node: unknown): number {
+  if (Array.isArray(node)) return node.reduce<number>((sum, n) => sum + countSeparators(n), 0)
+  if (typeof node !== 'object' || node === null) return 0
+  const record = node as Record<string, unknown>
+  const here = record.type === 'separator' ? 1 : 0
+  return here + Object.values(record).reduce<number>((sum, n) => sum + countSeparators(n), 0)
+}
+
 /** ทุก bubble ในข้อความ ไม่ว่าจะเป็นใบเดี่ยวหรือ carousel */
 function bubblesOf(message: unknown): unknown[] {
   if (typeof message !== 'object' || message === null) return []
@@ -110,6 +119,21 @@ describe('draftCardMessage — วงที่ใหญ่เกินหนึ�
     // D16 — ชื่อทุกคนที่จะโดนหารต้องอยู่ครบ ไม่ว่าการ์ดจะถูกแบ่งกี่ใบ
     const texts = allText(message).join(LF)
     for (const line of BIG.lines) expect(texts).toContain(line.name)
+  })
+
+  /**
+   * **หัวการ์ดต้องซ้ำอยู่ทุกใบ** — สิ่งที่คนเลื่อนไปใบที่สามแล้วต้องยังรู้คือ
+   * "นี่บิลอะไร ยอดเท่าไหร่" · ใบที่ไม่มีหัวคือรายชื่อกับตัวเลขลอยๆ ที่อ่านไม่ได้
+   */
+  it('ทุก bubble มีหัวการ์ด ไม่ใช่เฉพาะใบแรก', () => {
+    const message = draftCardMessage(BIG, DRAFT_ID)
+    const bubbles = bubblesOf(message)
+    expect(bubbles.length).toBeGreaterThan(1)
+    for (const bubble of bubbles) {
+      const texts = allText(bubble).join(LF)
+      expect(texts).toContain(BIG.description)
+      expect(texts).toContain('฿5,000')
+    }
   })
 
   it('ทุก bubble มีปุ่มยืนยัน — ปุ่มที่อยู่ใบเดียวคือปุ่มที่เลื่อนผ่านแล้วหาไม่เจอ', () => {
@@ -473,6 +497,25 @@ describe('balanceCardMessage — วงที่ใหญ่เกินหน�
     const texts = allText(messages[0]).join(LF)
     for (const block of blocks) expect(texts).toContain(block.creditorName)
   })
+
+  it('ทุก bubble มีหัวการ์ด `ยอดค้าง` กับยอดรวม ไม่ใช่เฉพาะใบแรก', () => {
+    const blocks = Array.from({ length: 15 }, (_, i) => ({
+      creditorName: `เจ้าหนี้คนที่ ${i}`,
+      totalSatang: 10000,
+      rows: Array.from({ length: 8 }, (_, k) => ({
+        debtorName: `ลูกหนี้ ${i}-${k}`,
+        amountSatang: 1250,
+      })),
+    }))
+    const bubbles = bubblesOf(balanceCardMessage(blocks)[0])
+    expect(bubbles.length).toBeGreaterThan(1)
+    for (const bubble of bubbles) {
+      const texts = allText(bubble).join(LF)
+      expect(texts).toContain('ยอดค้าง')
+      // 15 บล็อก × ฿100
+      expect(texts).toContain('฿1,500')
+    }
+  })
 })
 
 describe('billDetailCardMessage — บิลใบเดียว', () => {
@@ -530,6 +573,48 @@ describe('billDetailCardMessage — บิลใบเดียว', () => {
     const texts = allText(messages[0]).join(LF)
     for (const line of many.lines) expect(texts).toContain(line.name)
     expect(texts).toContain('บิงซู')
+  })
+
+  it('ทุก bubble ของ carousel มีหัวการ์ด — ชื่อบิล วันที่ คนจ่าย ยอดรวม', () => {
+    const many = {
+      ...DETAIL,
+      lines: Array.from({ length: 60 }, (_, i) => ({
+        name: `เพื่อนหมายเลข ${i}`,
+        amountSatang: 1500,
+        isPayer: false,
+      })),
+      items: [{ name: 'บิงซู', amountSatang: 22000, eaterNames: ['aek', 'dear'] }],
+    }
+    const bubbles = bubblesOf(billDetailCardMessage(many)[0])
+    expect(bubbles.length).toBeGreaterThan(1)
+    for (const bubble of bubbles) {
+      const texts = allText(bubble).join(LF)
+      expect(texts).toContain(DETAIL.description)
+      expect(texts).toContain(DETAIL.date)
+      expect(texts).toContain(DETAIL.payerName)
+      expect(texts).toContain('฿900')
+    }
+  })
+
+  /**
+   * ทาง bubble เดี่ยวคั่นสองส่วนด้วย separator อยู่แล้ว — ทาง carousel ต้องคั่น
+   * ด้วย ไม่งั้นแถวสุดท้ายของรายการกับแถวแรกของรายคนไหลติดกันเป็นกองเดียว
+   */
+  it('carousel ยังมีเส้นคั่นระหว่างส่วนรายการกับส่วนรายคน', () => {
+    const many = {
+      ...DETAIL,
+      lines: Array.from({ length: 60 }, (_, i) => ({
+        name: `เพื่อนหมายเลข ${i}`,
+        amountSatang: 1500,
+        isPayer: false,
+      })),
+      items: [{ name: 'บิงซู', amountSatang: 22000, eaterNames: ['aek', 'dear'] }],
+    }
+    const bubbles = bubblesOf(billDetailCardMessage(many)[0])
+    // หัวการ์ดมี separator ของตัวเองอยู่แล้วหนึ่งเส้นต่อใบ — ที่นับคือเส้นที่เกินมา
+    const separators = countSeparators(bubbles)
+    const headerSeparators = countSeparators(bubblesOf(billDetailCardMessage(DETAIL)[0]))
+    expect(separators).toBeGreaterThan(headerSeparators * bubbles.length)
   })
 
   it('บิลที่ยาวจนต้องลดรูปเป็น text ยังขนรายการไปด้วย — ไม่ตัดครึ่งใบทิ้ง', () => {
