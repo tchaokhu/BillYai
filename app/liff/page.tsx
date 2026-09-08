@@ -15,7 +15,15 @@
  */
 
 import { useEffect, useMemo, useState } from 'react'
-import { eatersOf, isNewName, parseSatang, payerOf, similarName, totalsOf } from '@/lib/liff/bill'
+import {
+  eatersOf,
+  isNewName,
+  parseSatang,
+  payerOf,
+  peopleOf,
+  similarName,
+  totalsOf,
+} from '@/lib/liff/bill'
 import type { AdjustmentMode, BillState } from '@/lib/liff/bill'
 import type { LiffSession } from '@/lib/liff/session'
 import { formatSatang } from '@/lib/money'
@@ -153,7 +161,7 @@ export default function LiffPage() {
   /** เอา session จาก server มาเป็นสถานะบนจอ — ใช้ทั้งตอนเปิดและตอนเซฟเสร็จ */
   function adopt(next: LiffSession): void {
     setSession(next)
-    const people = next.lines.map((line) => line.name)
+    const people = peopleOf(next.lines)
     const payer = payerOf(next.lines)
     const paidSatang = next.draft.totalSatang + next.draft.adjustmentSatang
     setPaid(money(paidSatang))

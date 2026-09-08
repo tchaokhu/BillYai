@@ -24,7 +24,25 @@ import type { DraftItem, DraftLine, Share } from '@/lib/types'
  * จนคนนั้นหายจากบิลทั้งคน
  */
 export function payerOf(lines: readonly DraftLine[]): string | null {
-  return lines.find((line) => line.isPayer)?.name ?? null
+  // trim ด้วยเหตุผลเดียวกับ `peopleOf` — ค่านี้ถูกเทียบกับชื่อที่ `peopleOf` คืน
+  return lines.find((line) => line.isPayer)?.name.trim() ?? null
+}
+
+/**
+ * คนในบิลตามที่หน้าจอเห็น — **สองแถวชื่อเดียวกันคือคนเดียว**
+ *
+ * การ์ดมีสองแถวชื่อเดียวกันได้จริง: คนพิมพ์ที่ claim ชื่อ `กอล์ฟ` ไว้แล้วพิมพ์
+ * `+ ข้าว 1200 กอล์ฟ ตูน รวมฉัน` ได้แถวผู้ร่วมหาร `กอล์ฟ` กับแถวคนจ่ายที่ก็ชื่อ
+ * `กอล์ฟ` แยกกัน (`lib/flow/draft.ts`) แล้ว `confirmDraft` ยุบให้ตอนลง ledger
+ *
+ * บนหน้าจอเขาเป็นคนเดียว — ชิปสองอันชื่อเดียวกันติ๊กแยกกันไม่ได้ (`key` ชนกันด้วย)
+ * และ `readBill` ปฏิเสธชื่อซ้ำ ซึ่งแปลว่าบิลใบนั้น**กดเซฟไม่ผ่านตลอดอายุการ์ด** ·
+ * ยุบตรงนี้ให้ผลเดียวกับที่ `confirmDraft` ทำอยู่แล้ว ไม่ได้เปลี่ยนยอดของใคร
+ */
+export function peopleOf(lines: readonly DraftLine[]): string[] {
+  // trim ก่อนเทียบเสมอ — `readBill` เทียบชื่อหลัง trim และ payload ที่เขียนไว้ก่อน
+  // กฎนั้นยังนอนอยู่ในตารางได้อีก 24 ชม.
+  return [...new Set(lines.map((line) => line.name.trim()))]
 }
 
 /**
