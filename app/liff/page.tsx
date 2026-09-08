@@ -25,6 +25,7 @@ import {
   totalsOf,
 } from '@/lib/liff/bill'
 import type { AdjustmentMode, BillState } from '@/lib/liff/bill'
+import { shouldRelogin } from '@/lib/liff/recover'
 import type { LiffSession } from '@/lib/liff/session'
 import { formatSatang } from '@/lib/money'
 import type { DraftItem } from '@/lib/types'
@@ -42,6 +43,58 @@ type Phase =
   | { kind: 'ready' }
   | { kind: 'saved' }
   | { kind: 'failed'; message: string }
+
+/**
+ * จำว่าแท็บนี้พา login ใหม่ไปแล้ว — **`sessionStorage` ไม่ใช่ `useState`**
+ *
+ * `liff.login()` พาออกจากหน้าไปเลย state ใน React ตายไปพร้อมกัน · ค่านี้ต้องรอด
+ * ข้าม redirect ถึงจะกันลูปได้ และต้องตายเมื่อปิดแท็บ ไม่ใช่ค้างถาวรจนรอบหน้าที่
+ * ควรกู้ได้กลับกู้ไม่ได้
+ *
+ * โหมดที่เบราว์เซอร์ปิด storage ไว้จะโยน — ตกลงมาเป็น "ยังไม่เคยลอง" ซึ่งแปลว่า
+ * ได้ login ใหม่หนึ่งรอบเสมอ ยังดีกว่าตันตั้งแต่รอบแรก
+ */
+const RELOGIN_KEY = 'billyai:liff:relogin'
+
+function reloginTried(): boolean {
+  try {
+    return sessionStorage.getItem(RELOGIN_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+function markReloginTried(): void {
+  try {
+    sessionStorage.setItem(RELOGIN_KEY, '1')
+  } catch {
+    // เขียนไม่ได้ก็ปล่อย — ราคาคือ login ใหม่ได้มากกว่าหนึ่งรอบในเบราว์เซอร์แบบนั้น
+  }
+}
+
+function clearReloginTried(): void {
+  try {
+    sessionStorage.removeItem(RELOGIN_KEY)
+  } catch {
+    // ลบไม่ได้ก็ปล่อย
+  }
+}
+
+/**
+ * พา login ใหม่แล้วกลับมาที่ URL เดิมพร้อม `draftId` เดิม
+ *
+ * **`logout()` ก่อน `login()`** — เคสที่กำลังกู้คือ token หมดอายุทั้งที่
+ * `isLoggedIn()` ยังเป็น `true` · เรียก `login()` เฉยๆ บนสถานะนั้นได้ใบเดิมกลับมา
+ * ซึ่งคือลูปที่พยายามออกมาพอดี
+ *
+ * `import()` ตัวเดิมถูกแคชไว้แล้วและ `liff.init()` รันไปแล้วทุกทางที่เรียกที่นี่
+ */
+async function reloginNow(): Promise<void> {
+  markReloginTried()
+  const { default: liff } = await import('@line/liff')
+  liff.logout()
+  liff.login({ redirectUri: location.href })
+}
 
 /** รูปเดียวกับการ์ดในแชท — `formatSatang` ใส่คอมมาหลักพันให้ด้วย (`฿1,200`) */
 function baht(satang: number): string {
@@ -137,6 +190,10 @@ export default function LiffPage() {
       }
       if (cancelled) return
       if (token === null || token === '') {
+        if (shouldRelogin('no-id-token', reloginTried())) {
+          void reloginNow()
+          return
+        }
         fail('เซสชันหมดอายุ — ปิดหน้านี้แล้วกดจากการ์ดใหม่')
         return
       }
@@ -145,9 +202,15 @@ export default function LiffPage() {
       const loaded = await post('/api/liff/session', { idToken: token, draftId })
       if (cancelled) return
       if (!loaded.ok) {
+        if (shouldRelogin(loaded.reason, reloginTried())) {
+          void reloginNow()
+          return
+        }
         fail(loaded.message)
         return
       }
+      // เข้าได้แล้ว — ปล่อยโควตา login ใหม่คืนให้รอบหน้า
+      clearReloginTried()
       adopt(loaded.session)
       setPhase({ kind: 'ready' })
     })()
@@ -278,6 +341,16 @@ export default function LiffPage() {
     })
     setSaving(false)
     if (!result.ok) {
+      /**
+       * **เซสชันหมดอายุระหว่างจดรายการเป็นเรื่องปกติ** — คนใช้เวลาติ๊กใครกินอะไร
+       * นานกว่าอายุ ID token ได้สบาย · ตรงนี้แถบเตือนช่วยไม่ได้เลย เพราะกดซ้ำก็ใช้
+       * token ใบเดิมที่ตายแล้ว · **ยอมเสียรายการที่กรอกไว้แลกกับการมีทางกดต่อ** —
+       * ทางเลือกอีกทางคือเสียมันอยู่ดีแล้วยังต้องปิดหน้าจอไปกดการ์ดใหม่เองด้วย
+       */
+      if (shouldRelogin(result.reason, reloginTried())) {
+        void reloginNow()
+        return
+      }
       /**
        * **แถบเตือน ไม่ใช่หน้าจอใหม่** — เน็ตหลุดกลางร้านอาหารต้องไม่กินบิลที่กรอก
        * มาทั้งใบ · ฟอร์มยังอยู่ครบ กดใหม่ได้ทันที
@@ -610,7 +683,11 @@ export default function LiffPage() {
 async function post(
   url: string,
   body: unknown,
-): Promise<{ ok: true; session: LiffSession } | { ok: false; message: string }> {
+): Promise<
+  | { ok: true; session: LiffSession }
+  /** `reason` = ค่าคงที่จาก `LiffFailure` · `undefined` เมื่อไปไม่ถึง server */
+  | { ok: false; message: string; reason?: string }
+> {
   let response: Response
   try {
     response = await fetch(url, {
@@ -622,7 +699,7 @@ async function post(
     return { ok: false, message: 'เน็ตขัดข้อง ลองใหม่อีกครั้ง' }
   }
 
-  let payload: { ok?: unknown; session?: unknown; message?: unknown } = {}
+  let payload: { ok?: unknown; session?: unknown; message?: unknown; reason?: unknown } = {}
   try {
     payload = (await response.json()) as typeof payload
   } catch {
@@ -632,10 +709,11 @@ async function post(
   if (response.ok && payload.ok === true && payload.session !== undefined) {
     return { ok: true, session: payload.session as LiffSession }
   }
-  return {
-    ok: false,
-    message: typeof payload.message === 'string' ? payload.message : 'เปิดบิลใบนี้ไม่ได้',
-  }
+  const message = typeof payload.message === 'string' ? payload.message : 'เปิดบิลใบนี้ไม่ได้'
+  // `exactOptionalPropertyTypes` เปิดอยู่ — คีย์ที่ไม่มีต้องไม่โผล่มาเป็น undefined
+  return typeof payload.reason === 'string'
+    ? { ok: false, message, reason: payload.reason }
+    : { ok: false, message }
 }
 
 const CSS = `
