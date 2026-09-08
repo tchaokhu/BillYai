@@ -525,6 +525,52 @@ describe('confirmDraft — บิล itemized จากหน้าจอ LIFF',
   })
 
   /**
+   * **บิล itemized ที่คนจ่ายไม่ได้กินด้วย** — `+ ข้าว 1200 กอล์ฟ ตูน` ที่ไม่มี
+   * `รวมฉัน` แล้วเอาเข้าหน้าจอจดรายชิ้น · draft แบบนี้ไม่มีแถวไหน `isPayer` เลย
+   *
+   * ก่อนแก้บั๊ก หน้าจอเดาว่าคนแรกในลิสต์คือคนจ่าย แล้วเซฟ `isPayer: true` ทับลงไป
+   * ตอนยืนยัน `commitExpense` ยัด `payerMemberId` ให้แถวนั้น (บรรทัด `line.isPayer
+   * ? payerMemberId : ...`) — **กอล์ฟหายจากบิลทั้งคน และคนจ่ายรับหนี้ของเขาไป
+   * เงียบๆ** · เทสต์นี้ยึดฝั่งที่ถูกไว้: ทุกคนในบิลต้องได้ยอดของตัวเองครบ และ
+   * คนจ่ายต้องไม่มีแถวหนี้เลย
+   */
+  it('คนจ่ายที่ไม่ได้อยู่ในบิล — ทุกคนในบิลได้ยอดของตัวเอง คนจ่ายไม่มีหนี้', async () => {
+    const lineUserId = fakeLineUserId()
+    const draft = await makeDraft({
+      lineUserId,
+      draft: {
+        ...ITEM_DRAFT,
+        description: 'ข้าว',
+        totalSatang: 120000,
+        adjustmentSatang: 0,
+        includesPayer: false,
+        items: [
+          { name: 'ข้าวผัด', amountSatang: 60000, eaterNames: ['กอล์ฟ'] },
+          { name: 'ผัดไทย', amountSatang: 60000, eaterNames: ['ตูน'] },
+        ],
+      },
+      lines: [
+        { name: 'กอล์ฟ', amountSatang: 60000, isNew: true, isPayer: false },
+        { name: 'ตูน', amountSatang: 60000, isNew: true, isPayer: false },
+      ],
+    })
+
+    const result = await confirmDraft({
+      draftId: draft.id,
+      lineUserId,
+      payer: { kind: 'new', displayName: 'nut' },
+    })
+    expect(result.kind).toBe('committed')
+    if (result.kind !== 'committed') return
+
+    // `nut` จ่ายไปทั้งใบและไม่ได้กิน — ไม่มีแถวของเขาใน `expense_share`
+    expect(await sharesOf(result.expenseId)).toEqual([
+      { display_name: 'กอล์ฟ', amount_satang: 60000 },
+      { display_name: 'ตูน', amount_satang: 60000 },
+    ])
+  })
+
+  /**
    * **คนพิมพ์ที่ยังไม่ claim เพิ่มชื่อจริงของตัวเองเข้าบิลจากหน้าจอ**
    *
    * การ์ดเรียกเขาว่า `คุณ` (ADR 0002) ส่วนชื่อจริงของเขายังลอยอยู่ใน Roster ปุ่ม

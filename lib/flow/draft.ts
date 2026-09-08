@@ -26,7 +26,7 @@ export const PAYER_LABEL = 'คุณ'
  * ขึ้นต้นด้วยช่องว่างโดยตั้งใจ: ชื่อทุกชื่อถูก trim ก่อนเทียบ ค่านี้จึงไม่มีทาง
  * เท่ากับชื่อของใครได้เลย
  */
-const PAYER_KEY = ' payer'
+export const PAYER_KEY = ' payer'
 
 export type { DraftLine }
 

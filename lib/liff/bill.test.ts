@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { eatersOf, parseSatang, scaleRound, similarName, totalsOf } from './bill'
+import { eatersOf, isNewName, parseSatang, payerOf, scaleRound, similarName, totalsOf } from './bill'
 import type { BillState } from './bill'
+import type { DraftLine } from '@/lib/types'
 
 const BILL: BillState = {
   paidSatang: 48700,
@@ -18,6 +19,52 @@ const BILL: BillState = {
   vatPct: 700,
   typedAdjustmentSatang: 0,
 }
+
+describe('payerOf — คนจ่ายมาจากแถวของ draft เท่านั้น', () => {
+  const line = (name: string, isPayer: boolean): DraftLine => ({
+    name,
+    amountSatang: 60000,
+    isNew: false,
+    isPayer,
+  })
+
+  it('แถวที่ติดป้าย `isPayer` คือคนจ่าย', () => {
+    expect(payerOf([line('คุณ', true), line('dear', false)])).toBe('คุณ')
+  })
+
+  /**
+   * `+ ข้าว 1200 กอล์ฟ ตูน` ที่ไม่มี `รวมฉัน` — คนพิมพ์จ่ายแทนล้วน ไม่ได้กินด้วย
+   * จึงไม่มีแถวของเขาในบิล · **เดาว่าเป็นคนแรกในลิสต์คือติดป้ายผิดคน** แล้วคนนั้น
+   * จะหายจากบิลทั้งคนตอนกดยืนยัน เพราะแถว `isPayer` ถูกยัดให้คนที่กดยืนยัน
+   */
+  it('ไม่มีแถวไหนติดป้ายเลย → `null` ไม่ใช่คนแรกในลิสต์', () => {
+    expect(payerOf([line('กอล์ฟ', false), line('ตูน', false)])).toBeNull()
+  })
+})
+
+/**
+ * ป้าย `(ใหม่)` บนหน้าจอต้องตอบเหมือน `saveLiffDraft` เป๊ะ — ไม่งั้นคนเห็นป้ายตอน
+ * แก้ แล้วป้ายหายตอนเซฟ (หรือกลับกัน) ซึ่งอ่านได้ว่าระบบเปลี่ยนใจเงียบๆ
+ */
+describe('isNewName — ป้าย `(ใหม่)`', () => {
+  it('ชื่อที่วงยังไม่รู้จักติดป้าย ชื่อที่รู้จักแล้วไม่ติด', () => {
+    expect(isNewName('แนน', 'คุณ', ['dear'])).toBe(true)
+    expect(isNewName('dear', 'คุณ', ['dear'])).toBe(false)
+  })
+
+  /**
+   * แถวของคนพิมพ์ชื่อ `คุณ` (ADR 0002) ซึ่งไม่มีวันอยู่ใน Roster — เทียบตรงๆ จึง
+   * ติดป้ายให้เขาทุกครั้ง · `save.ts` จงใจไม่ติด หน้าจอต้องตอบเหมือนกัน
+   */
+  it('คนจ่ายไม่ติดป้ายเลย ต่อให้ชื่อไม่อยู่ใน Roster', () => {
+    expect(isNewName('คุณ', 'คุณ', ['dear'])).toBe(false)
+  })
+
+  it('บิลที่คนจ่ายไม่ได้อยู่ในบิล — ทุกชื่อยังเทียบกับ Roster ตามปกติ', () => {
+    expect(isNewName('กอล์ฟ', null, ['dear'])).toBe(true)
+    expect(isNewName('dear', null, ['dear'])).toBe(false)
+  })
+})
 
 describe('totalsOf — โหมด auto (ส่วนต่าง)', () => {
   it('ส่วนปรับคือ `ยอดที่จ่ายจริง − รวมรายชิ้น` และผลรวมรายคนเท่ายอดที่จ่ายจริง', () => {

@@ -35,7 +35,6 @@ function draftRecord(over: Partial<DraftRecord> = {}): DraftRecord {
 const BILL: SaveLiffDraftBill = {
   paidSatang: 48700,
   people: ['คุณ', 'dear'],
-  payerName: 'คุณ',
   items: [
     { name: 'บิงซู', amountSatang: 22000, eaterNames: ['คุณ', 'dear'] },
     { name: 'โทสต์', amountSatang: 18000, eaterNames: ['dear'] },
@@ -129,6 +128,14 @@ describe('saveLiffDraft — ยอดคำนวณใหม่ฝั่ง ser
     expect(result.session.lines.find((line) => line.isPayer)?.isNew).toBe(false)
   })
 
+  it('บิลที่คนจ่ายกินด้วย ยังคง `includesPayer` ไว้หลังเซฟ', async () => {
+    const { result } = await save(BILL)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.session.draft.includesPayer).toBe(true)
+    expect(result.session.lines.find((line) => line.isPayer)?.name).toBe('คุณ')
+  })
+
   it('เก็บ `description` กับ `eventTag` เดิมไว้ — หน้าจอแก้รายการ ไม่ได้แก้ชื่อบิล', async () => {
     const { result } = await save(BILL)
     expect(result.ok).toBe(true)
@@ -145,6 +152,52 @@ describe('saveLiffDraft — ยอดคำนวณใหม่ฝั่ง ser
   })
 })
 
+/**
+ * `+ ข้าว 1200 กอล์ฟ ตูน` — คนพิมพ์จ่ายแทนล้วน ไม่ได้กินด้วย · draft แบบนี้
+ * `includesPayer: false` และ **ไม่มีแถวไหน `isPayer` เลย** ซึ่งถูกต้องแล้ว
+ */
+describe('saveLiffDraft — คนจ่ายที่ไม่ได้อยู่ในบิล', () => {
+  const RECORD = draftRecord({
+    draft: {
+      description: 'ข้าว',
+      totalSatang: 120000,
+      mode: 'equal',
+      participants: [
+        { name: 'กอล์ฟ', weight: 1 },
+        { name: 'ตูน', weight: 1 },
+      ],
+      includesPayer: false,
+      adjustmentSatang: 0,
+    },
+    lines: [
+      { name: 'กอล์ฟ', amountSatang: 60000, isNew: false, isPayer: false },
+      { name: 'ตูน', amountSatang: 60000, isNew: false, isPayer: false },
+    ],
+  })
+
+  const BILL_OUTSIDE = {
+    paidSatang: 120000,
+    people: ['กอล์ฟ', 'ตูน'],
+    items: [{ name: 'ข้าว', amountSatang: 120000, eaterNames: [] }],
+  }
+
+  /**
+   * แถว `isPayer` แปลว่า "แถวนี้เป็นของคนที่กดยืนยัน" — `commitExpense` เอา
+   * `payerMemberId` ยัดให้แถวนั้นตรงๆ · ติดป้ายผิดคนแปลว่าคนนั้นหายจากบิลทั้งคน
+   * และคนจ่ายรับหนี้ของเขาไปเงียบๆ · client จึงตั้งคนจ่ายเองไม่ได้เด็ดขาด
+   */
+  it('ไม่มีแถวไหนเป็นคนจ่าย ต่อให้ client ยืนยันว่ามี', async () => {
+    const { result } = await save(
+      { ...BILL_OUTSIDE, payerName: 'กอล์ฟ' },
+      { findDraft: async () => RECORD },
+    )
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.session.lines.filter((line) => line.isPayer)).toEqual([])
+    expect(result.session.draft.includesPayer).toBe(false)
+  })
+})
+
 describe('saveLiffDraft — ทางที่ต้องปฏิเสธ', () => {
   it('คนอื่นในกลุ่มเซฟทับการ์ดของคนอื่นไม่ได้ และต้องไม่เขียนอะไรเลย', async () => {
     const { result, saved } = await save(BILL, {
@@ -158,7 +211,8 @@ describe('saveLiffDraft — ทางที่ต้องปฏิเสธ', (
     ['ไม่ใช่ object', 'บิล'],
     ['ไม่มีรายการเลย', { ...BILL, items: [] }],
     ['ไม่มีคนในบิล', { ...BILL, people: [], items: [] }],
-    ['คนจ่ายไม่ได้อยู่ในบิล', { ...BILL, payerName: 'ไม่มีคนนี้' }],
+    // คนจ่ายหลุดออกจากบิล = ไม่มีแถวไหนรับ `payerMemberId` ตอนยืนยัน (D55)
+    ['คนจ่ายถูกเอาออกจากบิล', { ...BILL, people: ['dear'], items: [{ name: 'x', amountSatang: 44000, eaterNames: ['dear'] }] }],
     ['ชื่อคนซ้ำในบิล', { ...BILL, people: ['คุณ', 'คุณ'] }],
     ['คนกินที่ไม่ได้อยู่ในบิล', { ...BILL, items: [{ name: 'x', amountSatang: 44000, eaterNames: ['ผี'] }] }],
     ['ยอดที่จ่ายจริงเป็นศูนย์', { ...BILL, paidSatang: 0 }],
