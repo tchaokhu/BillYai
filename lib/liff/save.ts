@@ -13,6 +13,7 @@
 import { authorizeDraft } from './authorize'
 import type { AuthorizeDraftDeps, AuthorizeDraftRequest, LiffFailure } from './authorize'
 import type { LiffSession } from './session'
+import { PAYER_KEY } from '@/lib/flow/draft'
 import { splitExpense } from '@/lib/split'
 import type { DraftRecord, UpdateDraftInput } from '@/lib/repo/drafts'
 import type { DraftItem, DraftLine, ExpenseDraft, Item, Participant, Share } from '@/lib/types'
@@ -23,8 +24,6 @@ export interface SaveLiffDraftBill {
   paidSatang: number
   /** คนในบิลนี้ เรียงตามที่หน้าจอโชว์ */
   people: string[]
-  /** ต้องเป็นหนึ่งใน `people` */
-  payerName: string
   items: DraftItem[]
 }
 
@@ -72,10 +71,6 @@ function readBill(value: unknown): SaveLiffDraftBill | null {
   }
   if (people.length === 0) return null
 
-  const payerName = nonBlank(record.payerName)
-  // คนจ่ายที่ไม่ได้อยู่ในบิลแปลว่าไม่มีใครรับเศษ และแถว `isPayer` จะหายไปจากการ์ด
-  if (payerName === null || !people.includes(payerName)) return null
-
   if (!Array.isArray(record.items) || record.items.length === 0) return null
   const items: DraftItem[] = []
   for (const entry of record.items) {
@@ -109,7 +104,7 @@ function readBill(value: unknown): SaveLiffDraftBill | null {
     items.push({ name, amountSatang, eaterNames })
   }
 
-  return { paidSatang, people, payerName, items }
+  return { paidSatang, people, items }
 }
 
 export async function saveLiffDraft(
@@ -121,6 +116,21 @@ export async function saveLiffDraft(
 
   const bill = readBill(request.bill)
   if (bill === null) return { ok: false, reason: 'bad-request' }
+
+  /**
+   * **คนจ่ายมาจาก draft ที่เก็บไว้ ไม่ใช่จากที่หน้าจอบอก** — แถว `isPayer` แปลว่า
+   * "แถวนี้เป็นของคนที่กดยืนยัน" และ `commitExpense` ยัด `payerMemberId` ให้แถวนั้น
+   * ตรงๆ · ให้ client ตั้งเองแปลว่าใครก็โยนหนี้ของตัวเองไปให้คนกดยืนยันได้
+   *
+   * **`null` = คนจ่ายไม่ได้กินด้วย** (`+ ข้าว 1200 กอล์ฟ ตูน` ที่ไม่มี `รวมฉัน`)
+   * ซึ่งเป็น draft ที่ถูกต้องและไม่มีแถวไหน `isPayer` เลย · เดาว่าเป็นคนแรกในลิสต์
+   * คือการติดป้ายผิดคน แล้วคนนั้นจะหายจากบิลทั้งคนตอนยืนยัน
+   */
+  const payerName = authorized.record.lines.find((line) => line.isPayer)?.name.trim() ?? null
+  // คนจ่ายที่หลุดออกจากบิลแปลว่าไม่มีแถวไหนรับ `payerMemberId` ตอนยืนยัน (D55)
+  if (payerName !== null && !bill.people.includes(payerName)) {
+    return { ok: false, reason: 'bad-request' }
+  }
 
   const totalSatang = bill.items.reduce((sum, item) => sum + item.amountSatang, 0)
   // `splitExpense` ต้องการยอดก่อนส่วนปรับมากกว่า 0 — ทุกชิ้นราคาศูนย์ไม่มีอะไรให้หาร
@@ -150,7 +160,8 @@ export async function saveLiffDraft(
     shares = splitExpense({
       totalSatang,
       adjustmentSatang,
-      payerId: bill.payerName,
+      // ไม่มีคนจ่ายในบิล = ไม่มีตัวตัดสินเศษ ซึ่ง `splitExpense` รับได้ (ดู `PAYER_KEY`)
+      payerId: payerName ?? PAYER_KEY,
       mode: 'itemized',
       participants,
       items,
@@ -181,8 +192,8 @@ export async function saveLiffDraft(
      * ชื่อ `คุณ` (ADR 0002) ซึ่งไม่มีวันอยู่ใน Roster การเทียบตรงๆ จึงติดป้ายให้
      * ทุกครั้งที่เซฟ
      */
-    isNew: name !== bill.payerName && !known.has(name),
-    isPayer: name === bill.payerName,
+    isNew: name !== payerName && !known.has(name),
+    isPayer: name === payerName,
   }))
 
   const previous = authorized.record.draft
@@ -192,7 +203,12 @@ export async function saveLiffDraft(
     totalSatang,
     mode: 'itemized',
     participants: bill.people.map((name) => ({ name, weight: 1 })),
-    includesPayer: true,
+    /**
+     * **คิดจากแถว ไม่ใช่ก๊อป `previous.includesPayer` มา** — ทั้งสองค่าตรงกันเสมอ
+     * สำหรับ draft ที่ `buildDraft` สร้างได้วันนี้ แต่แถวคือของที่เราเพิ่งเขียน
+     * ในบรรทัดบน การอ่านจากที่เดียวกันจึงไม่มีทางหลุดจากกัน
+     */
+    includesPayer: payerName !== null,
     adjustmentSatang,
     items: bill.items,
   }

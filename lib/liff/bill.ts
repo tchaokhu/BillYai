@@ -11,8 +11,36 @@
  * แล้วส่งกลับมา
  */
 
+import { PAYER_KEY } from '@/lib/flow/draft'
 import { splitExpense } from '@/lib/split'
-import type { DraftItem, Share } from '@/lib/types'
+import type { DraftItem, DraftLine, Share } from '@/lib/types'
+
+/**
+ * คนจ่ายของ draft ใบนี้ — **อ่านจากแถว ไม่ใช่เดาจากลำดับ**
+ *
+ * `null` = คนพิมพ์จ่ายแทนล้วน ไม่ได้อยู่ในบิล (`+ ข้าว 1200 กอล์ฟ ตูน` ที่ไม่มี
+ * `รวมฉัน`) ซึ่งเป็น draft ที่ถูกต้องและไม่มีแถวไหน `isPayer` เลย · ตกไปที่คนแรก
+ * ในลิสต์แปลว่าติดป้ายผิดคน แล้ว `commitExpense` จะยัด `payerMemberId` ให้แถวนั้น
+ * จนคนนั้นหายจากบิลทั้งคน
+ */
+export function payerOf(lines: readonly DraftLine[]): string | null {
+  return lines.find((line) => line.isPayer)?.name ?? null
+}
+
+/**
+ * ชื่อนี้วงยังไม่รู้จัก — ป้าย `(ใหม่)` (D28) · **กติกาเดียวกับ `saveLiffDraft`**
+ *
+ * **คนจ่ายไม่ติดป้ายเลย** — ป้ายนี้ถามว่า "พิมพ์ชื่อผิดหรือเปล่า" ซึ่งไม่มีความหมาย
+ * กับคนที่ยังไม่ถูกระบุตัวตน และแถวของเขาชื่อ `คุณ` (ADR 0002) ซึ่งไม่มีวันอยู่ใน
+ * Roster · หน้าจอกับ server ต้องตอบเหมือนกัน ไม่งั้นป้ายจะหายตอนกดเซฟ
+ */
+export function isNewName(
+  name: string,
+  payerName: string | null,
+  roster: readonly string[],
+): boolean {
+  return name !== payerName && !roster.some((known) => known.trim() === name.trim())
+}
 
 /** เปอร์เซ็นต์เก็บเป็นทศนิยมสองตำแหน่ง — `10.5%` = `1050` ไม่มี float ที่ไหน */
 export const PCT_SCALE = 100
@@ -32,7 +60,8 @@ export interface BillState {
   /** ยอดบนใบเสร็จ รวมค่าบริการและ VAT แล้ว */
   paidSatang: number
   people: string[]
-  payerName: string
+  /** `null` = คนจ่ายไม่ได้อยู่ในบิล — ดู `payerOf` */
+  payerName: string | null
   items: DraftItem[]
   mode: AdjustmentMode
   svcOn: boolean
@@ -120,7 +149,8 @@ export function totalsOf(bill: BillState): BillTotals {
       shares = splitExpense({
         totalSatang: sumItemsSatang,
         adjustmentSatang,
-        payerId: bill.payerName,
+        // ไม่มีคนจ่ายในบิล = ไม่มีตัวตัดสินเศษ ซึ่ง `splitExpense` รับได้
+        payerId: bill.payerName ?? PAYER_KEY,
         mode: 'itemized',
         participants: bill.people.map((name) => ({ memberId: name, weight: 1 })),
         items: bill.items.map((item) => ({

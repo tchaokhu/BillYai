@@ -15,7 +15,7 @@
  */
 
 import { useEffect, useMemo, useState } from 'react'
-import { eatersOf, parseSatang, similarName, totalsOf } from '@/lib/liff/bill'
+import { eatersOf, isNewName, parseSatang, payerOf, similarName, totalsOf } from '@/lib/liff/bill'
 import type { AdjustmentMode, BillState } from '@/lib/liff/bill'
 import type { LiffSession } from '@/lib/liff/session'
 import { formatSatang } from '@/lib/money'
@@ -154,7 +154,7 @@ export default function LiffPage() {
   function adopt(next: LiffSession): void {
     setSession(next)
     const people = next.lines.map((line) => line.name)
-    const payer = next.lines.find((line) => line.isPayer)?.name ?? people[0] ?? ''
+    const payer = payerOf(next.lines)
     const paidSatang = next.draft.totalSatang + next.draft.adjustmentSatang
     setPaid(money(paidSatang))
     setBill({
@@ -260,7 +260,7 @@ export default function LiffPage() {
       bill: {
         paidSatang: bill.paidSatang,
         people: bill.people,
-        payerName: bill.payerName,
+        // **ไม่ส่ง `payerName`** — server อ่านคนจ่ายจาก draft ที่เก็บไว้เอง (D26)
         items: rows.map((row) => ({
           name: row.name.trim(),
           amountSatang: row.amountSatang,
@@ -356,6 +356,11 @@ export default function LiffPage() {
             </span>
           ))}
         </div>
+        {bill.payerName === null && (
+          // บิลที่พิมพ์โดยไม่ใส่ `รวมฉัน` — คนจ่ายไม่ได้กินด้วย จึงไม่มีแถวของเขา
+          // ที่นี่ · ไม่บอกเลยจะดูเหมือนลืมใส่ชื่อคนจ่าย
+          <p className="quiet">คนที่พิมพ์บิลเป็นคนจ่าย และไม่ได้กินด้วย</p>
+        )}
 
         {picking && (
           <div className="picker">
@@ -552,7 +557,7 @@ export default function LiffPage() {
             <div key={share.memberId} className="line">
               <span>
                 {share.memberId}
-                {session.roster.includes(share.memberId) ? '' : ' (ใหม่)'}
+                {isNewName(share.memberId, bill.payerName, session.roster) ? ' (ใหม่)' : ''}
               </span>
               <b>{baht(share.amountSatang)}</b>
             </div>
