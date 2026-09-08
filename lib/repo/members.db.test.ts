@@ -134,6 +134,15 @@ describe('findMemberById', () => {
   it('คืน null เมื่อไม่มี id นั้น', async () => {
     expect(await findMemberById(randomUUID())).toBeNull()
   })
+
+  /**
+   * id นี้มาจาก `as=<memberId>` บน postback ของแถวเลือกตัวตน (ADR 0002) ซึ่งปลอมได้
+   * · ค่าที่ไม่ใช่ uuid ทำให้ Postgres โยนแล้วกลายเป็น 500 ที่ LINE ยิงซ้ำไม่รู้จบ ·
+   * `confirmDraft` ตอบ `gone` ให้ id ที่หาไม่เจออยู่แล้ว ซึ่งเป็นคำตอบที่ถูกที่นี่ด้วย
+   */
+  it('id ที่ไม่ใช่ uuid คือหาไม่เจอ ไม่ใช่ error', async () => {
+    await expect(findMemberById('member-0')).resolves.toBeNull()
+  })
 })
 
 // ─── Roster ที่โตเอง (D16) ────────────────────────────────────────────

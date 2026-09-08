@@ -525,6 +525,29 @@ describe('confirmDraft — บิล itemized จากหน้าจอ LIFF',
   })
 
   /**
+   * postback data ปลอมได้ และการ์ดลอยอยู่ในแชทได้ตลอดกาล · ทั้ง `confirm=` และ
+   * `as=` ถูกยัดเข้า `where id = $1` ของคอลัมน์ uuid — ค่าที่ไม่ใช่ uuid เคยทำให้
+   * Postgres โยนแล้วกลายเป็น 500 ซึ่ง **LINE ยิง postback เดิมกลับมาซ้ำ** จึงวน
+   * อยู่อย่างนั้นโดยคนกดไม่ได้ข้อความสักครั้ง · `gone` คือคำตอบเดียวกับ id ที่หาไม่เจอ
+   */
+  it.each([
+    ['draftId ไม่ใช่ uuid', { draftId: 'ไม่ใช่ uuid', as: null }],
+    ['`as=` ไม่ใช่ uuid', { draftId: null, as: 'member-0' }],
+  ])('%s → `gone` ไม่ใช่ error', async (_label, forged) => {
+    const lineUserId = fakeLineUserId()
+    const draft = await makeDraft({ lineUserId, draft: ITEM_DRAFT, lines: ITEM_LINES })
+
+    const result = await confirmDraft({
+      draftId: forged.draftId ?? draft.id,
+      lineUserId,
+      ...(forged.as === null
+        ? { payer: { kind: 'new' as const, displayName: 'กอล์ฟ' } }
+        : { payer: { kind: 'member' as const, memberId: forged.as } }),
+    })
+    expect(result).toEqual({ kind: 'gone' })
+  })
+
+  /**
    * **บิล itemized ที่คนจ่ายไม่ได้กินด้วย** — `+ ข้าว 1200 กอล์ฟ ตูน` ที่ไม่มี
    * `รวมฉัน` แล้วเอาเข้าหน้าจอจดรายชิ้น · draft แบบนี้ไม่มีแถวไหน `isPayer` เลย
    *

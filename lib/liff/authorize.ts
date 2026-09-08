@@ -7,6 +7,7 @@
  * ไม่รู้จัก Next, ไม่รู้จัก `process.env`, ไม่ต่อ DB — deps ฉีดเข้ามาหมด
  */
 
+import { isUuid } from '@/lib/db/uuid'
 import type { DraftRecord } from '@/lib/repo/drafts'
 import type { VerifyLiffIdTokenResult } from '@/lib/line/liff'
 
@@ -40,12 +41,6 @@ export type AuthorizeDraftResult =
   | { ok: true; record: DraftRecord }
   | { ok: false; reason: LiffFailure }
 
-/**
- * uuid v1–v5 ตามรูปที่ Postgres ยอมรับ — **ตัวพิมพ์ใหญ่ผ่านด้วย** เพราะ
- * `uuid` ของ Postgres ไม่แคร์ตัวพิมพ์ ปฏิเสธตรงนี้จะเข้มกว่าตัวจริงโดยไม่ได้อะไร
- */
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
-
 export async function authorizeDraft(
   request: AuthorizeDraftRequest,
   deps: AuthorizeDraftDeps,
@@ -66,7 +61,7 @@ export async function authorizeDraft(
    * สาธารณะที่ 500 ได้ด้วยค่าที่ใครก็พิมพ์ได้คือเสียงรบกวนถาวรใน log
    */
   const draftId = typeof request.draftId === 'string' ? request.draftId.trim() : ''
-  if (!UUID.test(draftId)) return { ok: false, reason: 'bad-request' }
+  if (!isUuid(draftId)) return { ok: false, reason: 'bad-request' }
 
   /**
    * **`unreachable` ไม่ใช่ `unauthenticated`** — token อาจจะดีอยู่ก็ได้ เราแค่

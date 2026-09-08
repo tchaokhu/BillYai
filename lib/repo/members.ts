@@ -10,6 +10,7 @@
 
 import { getPool, type Queryable } from '@/lib/db/client'
 import { toMember, type Member, type MemberRow } from '@/lib/db/rows'
+import { isUuid } from '@/lib/db/uuid'
 
 /** ทุกฟังก์ชันรับ `db` เข้ามาได้ เพื่อให้ผู้เรียกลากเข้า transaction เดียวกันได้ */
 function q(db?: Queryable): Queryable {
@@ -35,6 +36,8 @@ function requireRow(rows: readonly MemberRow[], memberId: string): Member {
 // ─── อ่าน ─────────────────────────────────────────────────────────────
 
 export async function findMemberById(id: string, db?: Queryable): Promise<Member | null> {
+  // id มาจาก postback ที่ปลอมได้ — ดู `isUuid`
+  if (!isUuid(id)) return null
   const { rows } = await q(db).query<MemberRow>(
     `select ${COLUMNS} from member where id = $1`,
     [id],
