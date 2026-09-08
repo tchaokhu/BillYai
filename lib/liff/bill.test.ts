@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import { eatersOf, isNewName, parseSatang, payerOf, scaleRound, similarName, totalsOf } from './bill'
+import {
+  eatersOf,
+  isNewName,
+  parseSatang,
+  payerOf,
+  peopleOf,
+  scaleRound,
+  similarName,
+  totalsOf,
+} from './bill'
 import type { BillState } from './bill'
 import type { DraftLine } from '@/lib/types'
 
@@ -40,12 +49,57 @@ describe('payerOf — คนจ่ายมาจากแถวของ draft 
   it('ไม่มีแถวไหนติดป้ายเลย → `null` ไม่ใช่คนแรกในลิสต์', () => {
     expect(payerOf([line('กอล์ฟ', false), line('ตูน', false)])).toBeNull()
   })
+
+  /**
+   * ค่านี้ถูกเทียบกับชื่อที่ `peopleOf` คืน ซึ่ง trim แล้ว — ไม่ trim ที่นี่แปลว่า
+   * ป้าย `จ่าย` หายจากชิป และชิปคนจ่ายกลายเป็นชิปที่กดเอาออกได้ (ชน D55)
+   */
+  it('คืนชื่อที่ trim แล้ว ให้เทียบกับ `peopleOf` ได้ตรงๆ', () => {
+    expect(payerOf([line(' กอล์ฟ ', true)])).toBe('กอล์ฟ')
+  })
 })
 
 /**
  * ป้าย `(ใหม่)` บนหน้าจอต้องตอบเหมือน `saveLiffDraft` เป๊ะ — ไม่งั้นคนเห็นป้ายตอน
  * แก้ แล้วป้ายหายตอนเซฟ (หรือกลับกัน) ซึ่งอ่านได้ว่าระบบเปลี่ยนใจเงียบๆ
  */
+/**
+ * **การ์ดมีสองแถวชื่อเดียวกันได้จริง** — คนพิมพ์ที่ claim ชื่อ `กอล์ฟ` ไว้แล้วพิมพ์
+ * `+ ข้าว 1200 กอล์ฟ ตูน รวมฉัน` · `buildDraft` ดันแถวผู้ร่วมหาร `กอล์ฟ` กับแถว
+ * คนจ่ายที่ก็ชื่อ `กอล์ฟ` แยกกัน แล้ว `confirmDraft` ยุบให้ตอนลง ledger
+ * (`lib/repo/confirm.ts` เขียนเคสนี้ไว้เอง)
+ *
+ * บนหน้าจอเขาเป็นคนเดียว: ชิปสองอันชื่อเดียวกันติ๊กแยกกันไม่ได้ และ `readBill`
+ * ปฏิเสธชื่อซ้ำ ซึ่งแปลว่าบิลใบนั้นกดเซฟไม่ผ่านตลอดอายุการ์ด
+ */
+describe('peopleOf — สองแถวชื่อเดียวกันคือคนเดียว', () => {
+  const line = (name: string, isPayer: boolean): DraftLine => ({
+    name,
+    amountSatang: 40000,
+    isNew: false,
+    isPayer,
+  })
+
+  it('ยุบชื่อซ้ำเหลือครั้งเดียว เรียงตามลำดับที่เจอครั้งแรก', () => {
+    expect(peopleOf([line('กอล์ฟ', false), line('ตูน', false), line('กอล์ฟ', true)])).toEqual([
+      'กอล์ฟ',
+      'ตูน',
+    ])
+  })
+
+  it('ไม่มีชื่อซ้ำก็คืนตามเดิมทั้งหมด', () => {
+    expect(peopleOf([line('คุณ', true), line('dear', false)])).toEqual(['คุณ', 'dear'])
+  })
+
+  /**
+   * payload ที่เขียนไว้ก่อนกฎ trim ยังนอนอยู่ในตารางได้ 24 ชม. · `readBill` เทียบ
+   * ชื่อหลัง trim ทั้งสองฝั่ง หน้าจอจึงต้องยุบแบบเดียวกัน ไม่งั้นเซฟไม่ผ่านเหมือนเดิม
+   */
+  it('เทียบหลัง trim — ชื่อที่ต่างกันแค่ช่องว่างคือคนเดียวกัน', () => {
+    expect(peopleOf([line(' กอล์ฟ ', false), line('กอล์ฟ', true)])).toEqual(['กอล์ฟ'])
+  })
+})
+
 describe('isNewName — ป้าย `(ใหม่)`', () => {
   it('ชื่อที่วงยังไม่รู้จักติดป้าย ชื่อที่รู้จักแล้วไม่ติด', () => {
     expect(isNewName('แนน', 'คุณ', ['dear'])).toBe(true)
