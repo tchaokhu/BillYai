@@ -249,6 +249,14 @@ describe('findDraft', () => {
     expect(await findDraft(randomUUID())).toBeNull()
   })
 
+  /**
+   * `draftId` มาจาก postback ของการ์ด Draft ซึ่งปลอมได้ · ค่าที่ไม่ใช่ uuid ทำให้
+   * Postgres โยนแล้วกลายเป็น 500 ซึ่ง LINE จะยิง postback เดิมกลับมาซ้ำไม่รู้จบ
+   */
+  it('id ที่ไม่ใช่ uuid คือหาไม่เจอ ไม่ใช่ error', async () => {
+    await expect(findDraft('ไม่ใช่ uuid')).resolves.toBeNull()
+  })
+
   it('payload ที่อ่านไม่ออกคืน null ไม่ throw — ปฏิบัติเหมือนการ์ดหมดอายุ', async () => {
     // payload ที่เขียนด้วยโค้ดเวอร์ชันก่อนหน้ายังนอนอยู่ได้ถึง 24 ชม. หลัง deploy
     const created = await createDraft(input())

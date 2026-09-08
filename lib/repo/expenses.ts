@@ -15,6 +15,7 @@
 
 import type { PoolClient } from 'pg'
 import { getPool, withTransaction, type Queryable } from '@/lib/db/client'
+import { isUuid } from '@/lib/db/uuid'
 import {
   toExpense,
   toExpenseItem,
@@ -457,6 +458,8 @@ export async function findExpenseById(
   id: string,
   db: Queryable = getPool(),
 ): Promise<ExpenseDetail | null> {
+  // id มาจาก postback ที่ปลอมได้ — ดู `isUuid`
+  if (!isUuid(id)) return null
   const expenseResult = await db.query<ExpenseRow>(`select * from expense where id = $1`, [id])
   const expenseRow = expenseResult.rows[0]
   if (!expenseRow) return null

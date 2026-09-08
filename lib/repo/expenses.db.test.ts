@@ -812,6 +812,16 @@ describe('commitExpense กับ transaction', () => {
 // ─── findExpenseById ──────────────────────────────────────────────────
 
 describe('findExpenseById', () => {
+  /**
+   * id มาจาก postback ของการ์ด `บิล` ซึ่งลอยอยู่ในแชทตลอดกาลและ **ปลอมได้** ·
+   * `where id = $1` ใส่คอลัมน์ uuid ตรงๆ ค่าที่ไม่ใช่ uuid จึงไม่ได้ "หาไม่เจอ"
+   * แต่ทำให้ Postgres โยน `invalid input syntax for type uuid` แล้วกลายเป็น 500 ·
+   * LINE ยิง postback เดิมซ้ำ 500 จึงวนอยู่อย่างนั้นโดยคนกดไม่ได้คำตอบสักครั้ง
+   */
+  it('id ที่ไม่ใช่ uuid คือหาไม่เจอ ไม่ใช่ error', async () => {
+    await expect(findExpenseById('e1')).resolves.toBeNull()
+  })
+
   it('คืน shares ครบและเรียงเหมือนเดิมทุกครั้งที่เรียก', async () => {
     const group = await makeGroup()
     const [a, b, c] = await makeTrio(group.id)

@@ -11,6 +11,7 @@
 
 import { getPool, type Queryable } from '@/lib/db/client'
 import { parseStoredDraft, type StoredDraft } from '@/lib/db/draft-payload'
+import { isUuid } from '@/lib/db/uuid'
 import type { DraftLine, ExpenseDraft } from '@/lib/types'
 
 /**
@@ -186,6 +187,8 @@ export async function updateDraft(
  * ไม่ออก เพราะทั้งสามกรณีจบเหมือนกันคือ "การ์ดใบนี้ใช้ไม่ได้แล้ว ให้พิมพ์ใหม่"
  */
 export async function findDraft(id: string, dbOrTx?: Queryable): Promise<DraftRecord | null> {
+  // id มาจาก postback ที่ปลอมได้ — ดู `isUuid`
+  if (!isUuid(id)) return null
   const result = await db(dbOrTx).query<DraftRow>(
     `select * from expense_draft
      where id = $1 and created_at > now() - ${TTL}`,
