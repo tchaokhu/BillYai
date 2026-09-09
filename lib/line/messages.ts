@@ -9,12 +9,17 @@
 import { IMPLEMENTED_COMMANDS, type ReplyPlan, type Surface } from '../flow/dispatch'
 import { formatSatang } from '../money'
 import type { BotCommand } from '../types'
-import type { LineFlexMessage } from './flex'
+import type { LineFlexMessage, QuickReplyItem } from './flex'
 
 /** text message ของ LINE — ยาวได้ 5000 ตัวอักษร */
 export interface LineTextMessage {
   type: 'text'
   text: string
+  /**
+   * **postback ติดกับข้อความธรรมดาได้ทางนี้** — ซึ่งเป็นสิ่งเดียวที่ทำให้การ์ดที่
+   * ลดรูปเป็นข้อความยังกดยืนยันได้ · ข้อความที่กดไม่ได้เท่ากับไม่มีการ์ด
+   */
+  quickReply?: { items: QuickReplyItem[] }
 }
 
 export type LineMessage = LineTextMessage | LineFlexMessage

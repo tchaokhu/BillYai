@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { balanceCardMessage, billDetailCardMessage, billListCardMessage, draftCardMessage } from './flex'
 import type { DraftCard } from '../flow/draft'
+import type { LineFlexMessage } from './flex'
+import type { LineMessage } from './messages'
 
 /** ตัวคั่นตอนยุบข้อความในการ์ดมาเทียบ — แยกไว้กันบรรทัดจริงหลุดเข้าไปในสตริง */
 const LF = String.fromCharCode(10)
@@ -12,6 +14,19 @@ const CARD: DraftCard = {
     { name: 'กอล์ฟ', amountSatang: 60000, isNew: true, isPayer: false },
     { name: 'ตูน', amountSatang: 60000, isNew: false, isPayer: false },
   ],
+}
+
+/**
+ * การ์ดที่คาดว่าเป็น Flex ใบเดียว — **ยืนยันว่ามีก้อนเดียวไปด้วยในตัว**
+ *
+ * ทางลงเป็นข้อความมีเทสต์ของมันเองแยกไว้ · ตัวช่วยนี้จึงต้องดังทันทีถ้าการ์ดปกติ
+ * เผลอแตกเป็นหลายก้อน
+ */
+function only(messages: LineMessage[]): LineFlexMessage {
+  expect(messages).toHaveLength(1)
+  const first = messages[0]
+  if (first === undefined || first.type !== 'flex') throw new Error('ต้องเป็นการ์ด Flex ใบเดียว')
+  return first
 }
 
 const DRAFT_ID = '4f1c2a5e-0000-4000-8000-000000000001'
@@ -59,7 +74,7 @@ function bubblesOf(message: unknown): unknown[] {
 
 describe('draftCardMessage — สิ่งที่คนต้องเห็นก่อนกด', () => {
   it('เป็น flex message ที่มี altText อ่านรู้เรื่อง', () => {
-    const message = draftCardMessage(CARD, DRAFT_ID)
+    const message = only(draftCardMessage(CARD, DRAFT_ID))
     expect(message.type).toBe('flex')
     expect(message.altText).toContain('ข้าว')
     expect(message.altText.length).toBeGreaterThan(0)
@@ -126,7 +141,7 @@ describe('draftCardMessage — ปุ่มเปิดหน้าจอจด�
   }
 
   it('มีปุ่มที่พา `draftId` ไปเปิดหน้าจอ', () => {
-    const message = draftCardMessage(CARD, DRAFT_ID, null, LIFF_URL)
+    const message = only(draftCardMessage(CARD, DRAFT_ID, null, LIFF_URL))
     expect(uris(message)).toContain(`${LIFF_URL}?draftId=${DRAFT_ID}`)
   })
 
@@ -135,7 +150,7 @@ describe('draftCardMessage — ปุ่มเปิดหน้าจอจด�
    * ลิงก์เสียบนการ์ดในกลุ่มแย่กว่าการ์ดที่ไม่มีปุ่มนั้น
    */
   it('ไม่ได้ตั้ง LIFF URL → ไม่มีปุ่มนั้นเลย และการ์ดยังใช้ได้ตามปกติ', () => {
-    const message = draftCardMessage(CARD, DRAFT_ID)
+    const message = only(draftCardMessage(CARD, DRAFT_ID))
     expect(uris(message)).toEqual([])
     expect(findPostbackData(message)).toBe(`confirm=${DRAFT_ID}`)
   })
@@ -145,7 +160,7 @@ describe('draftCardMessage — ปุ่มเปิดหน้าจอจด�
    * ตัวตนถูกถามตอนกดยืนยัน ไม่ใช่ตอนแก้รายการ
    */
   it('การ์ดของคนที่ยังไม่ยืนยันตัวตนก็มีปุ่มนี้', () => {
-    const message = draftCardMessage(CARD, DRAFT_ID, choices('กอล์ฟ'), LIFF_URL)
+    const message = only(draftCardMessage(CARD, DRAFT_ID, choices('กอล์ฟ'), LIFF_URL))
     expect(uris(message)).toContain(`${LIFF_URL}?draftId=${DRAFT_ID}`)
   })
 
@@ -160,7 +175,7 @@ describe('draftCardMessage — ปุ่มเปิดหน้าจอจด�
         isPayer: false,
       })),
     }
-    const message = draftCardMessage(big, DRAFT_ID, null, LIFF_URL)
+    const message = only(draftCardMessage(big, DRAFT_ID, null, LIFF_URL))
     const bubbles = bubblesOf(message)
     expect(bubbles.length).toBeGreaterThan(1)
     for (const bubble of bubbles) {
@@ -182,7 +197,7 @@ describe('draftCardMessage — วงที่ใหญ่เกินหนึ�
   }
 
   it('กลายเป็น carousel ไม่ใช่การ์ดที่ LINE ปฏิเสธทั้งก้อน', () => {
-    const message = draftCardMessage(BIG, DRAFT_ID)
+    const message = only(draftCardMessage(BIG, DRAFT_ID))
     expect(message.contents.type).toBe('carousel')
 
     // D16 — ชื่อทุกคนที่จะโดนหารต้องอยู่ครบ ไม่ว่าการ์ดจะถูกแบ่งกี่ใบ
@@ -195,7 +210,7 @@ describe('draftCardMessage — วงที่ใหญ่เกินหนึ�
    * "นี่บิลอะไร ยอดเท่าไหร่" · ใบที่ไม่มีหัวคือรายชื่อกับตัวเลขลอยๆ ที่อ่านไม่ได้
    */
   it('ทุก bubble มีหัวการ์ด ไม่ใช่เฉพาะใบแรก', () => {
-    const message = draftCardMessage(BIG, DRAFT_ID)
+    const message = only(draftCardMessage(BIG, DRAFT_ID))
     const bubbles = bubblesOf(message)
     expect(bubbles.length).toBeGreaterThan(1)
     for (const bubble of bubbles) {
@@ -206,7 +221,7 @@ describe('draftCardMessage — วงที่ใหญ่เกินหนึ�
   })
 
   it('ทุก bubble มีปุ่มยืนยัน — ปุ่มที่อยู่ใบเดียวคือปุ่มที่เลื่อนผ่านแล้วหาไม่เจอ', () => {
-    const message = draftCardMessage(BIG, DRAFT_ID)
+    const message = only(draftCardMessage(BIG, DRAFT_ID))
     for (const bubble of bubblesOf(message)) {
       expect(findPostbackData(bubble)).toBe(`confirm=${DRAFT_ID}`)
     }
@@ -215,7 +230,7 @@ describe('draftCardMessage — วงที่ใหญ่เกินหนึ�
 
 describe('draftCardMessage — ปุ่มยืนยัน', () => {
   it('postback data เป็น id ของ draft เท่านั้น สั้นและยาวคงที่ (ADR 0001)', () => {
-    const message = draftCardMessage(CARD, DRAFT_ID)
+    const message = only(draftCardMessage(CARD, DRAFT_ID))
     const json = JSON.stringify(message)
     expect(json).toContain(DRAFT_ID)
 
@@ -255,7 +270,7 @@ describe('draftCardMessage — ขนาด', () => {
         isPayer: false,
       })),
     }
-    const bytes = Buffer.byteLength(JSON.stringify(draftCardMessage(big, DRAFT_ID)), 'utf8')
+    const bytes = Buffer.byteLength(JSON.stringify(only(draftCardMessage(big, DRAFT_ID))), 'utf8')
     expect(bytes).toBeLessThan(10_000)
   })
 })
@@ -285,7 +300,7 @@ describe('draftCardMessage — คำอธิบายที่ยาวเก�
   const LONG = 'ก'.repeat(600)
 
   it('altText ไม่ทะลุเพดาน 400 ตัวอักษร', () => {
-    const message = draftCardMessage({ ...CARD, description: LONG }, DRAFT_ID)
+    const message = only(draftCardMessage({ ...CARD, description: LONG }, DRAFT_ID))
     expect(message.altText.length).toBeLessThanOrEqual(400)
   })
 
@@ -303,25 +318,25 @@ describe('draftCardMessage — คำอธิบายที่ยาวเก�
 
 describe('draftCardMessage — แถวเลือกตัวตน (D29 / ADR 0002)', () => {
   it('คนที่ยืนยันตัวตนแล้วได้ปุ่มยืนยันตามปกติ ไม่มี quick reply', () => {
-    const message = draftCardMessage(CARD, DRAFT_ID)
+    const message = only(draftCardMessage(CARD, DRAFT_ID))
     expect(message.quickReply).toBeUndefined()
     expect(findPostbackData(footerOf(message))).toBe(`confirm=${DRAFT_ID}`)
   })
 
   it('คนที่ยังไม่ยืนยันตัวตน — **ไม่มีปุ่มยืนยันบนการ์ด** เพราะกดแล้วไปต่อไม่ได้', () => {
-    const message = draftCardMessage(CARD, DRAFT_ID, choices('กอล์ฟ', 'ตูน'))
+    const message = only(draftCardMessage(CARD, DRAFT_ID, choices('กอล์ฟ', 'ตูน')))
     expect(findPostbackData(footerOf(message))).toBeNull()
     expect(allText(footerOf(message)).join('')).toContain('เลือกชื่อของคุณ')
   })
 
   it('quick reply มีชื่อที่ยังไม่มีเจ้าของ บวก `ฉันเป็นคนใหม่` ต่อท้ายเสมอ', () => {
-    const message = draftCardMessage(CARD, DRAFT_ID, choices('กอล์ฟ', 'ตูน'))
+    const message = only(draftCardMessage(CARD, DRAFT_ID, choices('กอล์ฟ', 'ตูน')))
     const labels = message.quickReply?.items.map((i) => i.action.label)
     expect(labels).toEqual(['กอล์ฟ', 'ตูน', 'ฉันเป็นคนใหม่'])
   })
 
   it('ทุกปุ่มพา draft id ไปด้วย — กดคือ claim + ยืนยันในจังหวะเดียว', () => {
-    const message = draftCardMessage(CARD, DRAFT_ID, choices('กอล์ฟ'))
+    const message = only(draftCardMessage(CARD, DRAFT_ID, choices('กอล์ฟ')))
     for (const item of message.quickReply?.items ?? []) {
       expect(item.action.data).toContain(DRAFT_ID)
       expect(item.action.data.length).toBeLessThanOrEqual(300)
@@ -329,14 +344,14 @@ describe('draftCardMessage — แถวเลือกตัวตน (D29 / AD
   })
 
   it('วงว่างก็ยังมี `ฉันเป็นคนใหม่` ให้กด', () => {
-    const message = draftCardMessage(CARD, DRAFT_ID, [])
+    const message = only(draftCardMessage(CARD, DRAFT_ID, []))
     expect(message.quickReply?.items).toHaveLength(1)
     expect(message.quickReply?.items[0]?.action.data).toBe(`confirm=${DRAFT_ID}&as=new`)
   })
 
   it('วงใหญ่ไม่ทะลุเพดาน 13 ปุ่มของ LINE', () => {
     const many = choices(...Array.from({ length: 40 }, (_, i) => `คนที่ ${i}`))
-    const message = draftCardMessage(CARD, DRAFT_ID, many)
+    const message = only(draftCardMessage(CARD, DRAFT_ID, many))
     expect(message.quickReply?.items.length).toBeLessThanOrEqual(13)
     // ช่องสุดท้ายต้องเป็น `ฉันเป็นคนใหม่` เสมอ ไม่งั้นคนที่ยังไม่มีชื่อไปต่อไม่ได้
     expect(message.quickReply?.items.at(-1)?.action.label).toBe('ฉันเป็นคนใหม่')
@@ -344,7 +359,7 @@ describe('draftCardMessage — แถวเลือกตัวตน (D29 / AD
 
   it('ชื่อยาวถูกตัดบนปุ่ม แต่ยังส่ง id เต็มกลับมา', () => {
     const long = 'ชื่อที่ยาวมากจนล้นปุ่มแน่นอนเลยจริงๆ'
-    const message = draftCardMessage(CARD, DRAFT_ID, choices(long))
+    const message = only(draftCardMessage(CARD, DRAFT_ID, choices(long)))
     const item = message.quickReply?.items[0]
     expect(item?.action.label.length).toBeLessThanOrEqual(20)
     expect(item?.action.displayText).toBe(long)
@@ -354,7 +369,7 @@ describe('draftCardMessage — แถวเลือกตัวตน (D29 / AD
     // ชื่อไทยที่ผ่าน encodeURIComponent ยาวขึ้นเก้าเท่า แล้วทะลุเพดาน 300
     // ตั้งแต่ชื่อยาวราว 27 ตัวอักษร ซึ่งเป็นชื่อเล่นที่ยาวแต่ไม่ได้เพี้ยน
     const absurd = 'ก'.repeat(200)
-    const message = draftCardMessage(CARD, DRAFT_ID, choices(absurd, 'ตูน'))
+    const message = only(draftCardMessage(CARD, DRAFT_ID, choices(absurd, 'ตูน')))
     for (const item of message.quickReply?.items ?? []) {
       expect(item.action.data.length).toBeLessThanOrEqual(300)
     }
@@ -785,5 +800,150 @@ describe('billDetailCardMessage — ขนาดกับคนจ่าย', ()
       if (message.type === 'text') expect(message.text.length).toBeLessThanOrEqual(5000)
     }
     expect(messages.length).toBeLessThanOrEqual(5)
+  })
+})
+
+/**
+ * **ทางลงสุดท้ายของการ์ด Draft** — ก่อนหน้านี้ไม่มี
+ *
+ * `pages === null` หรือ carousel ทะลุเพดาน แล้วโค้ดคืน bubble ใบเกินเพดานออกไป
+ * ทั้งใบ · LINE ปฏิเสธ reply ทั้งก้อน ผลคือ **แถว draft ถูกเขียนไปแล้วแต่ไม่มี
+ * การ์ดให้ใครกด** ซึ่งกู้ไม่ได้จนกว่าจะหมดอายุ 24 ชั่วโมง — คนพิมพ์ไม่ได้คำตอบ
+ * สักครั้งเดียว และพิมพ์ใหม่ก็ได้ผลเดิม
+ *
+ * เกณฑ์เดียวกับ `balanceCardMessage`: **ลดรูป ไม่ใช่ตัดเนื้อหา**
+ */
+describe('draftCardMessage — ใหญ่เกิน carousel ก็ยังต้องมีอะไรให้กด', () => {
+  const LIFF_URL = 'https://liff.line.me/1234567890-AbCdEfGh'
+
+  function huge(count: number): DraftCard {
+    return {
+      description: 'ทริปบริษัท',
+      totalSatang: count * 5555,
+      lines: Array.from({ length: count }, (_, i) => ({
+        name: `เพื่อนหมายเลข ${i}`,
+        amountSatang: 5555,
+        isNew: i % 2 === 0,
+        isPayer: false,
+      })),
+    }
+  }
+
+  /** ใหญ่พอให้ carousel รับไม่ไหว — 10 bubble ต่อ carousel คือเพดานที่ตั้งไว้ */
+  const HUGE = huge(600)
+
+  it('ตกลงมาเป็นข้อความ ไม่ใช่ bubble ที่ LINE ปฏิเสธ', () => {
+    const messages = draftCardMessage(HUGE, DRAFT_ID)
+    expect(messages.length).toBeGreaterThan(0)
+    for (const message of messages) expect(message.type).toBe('text')
+  })
+
+  it('ทุกก้อนอยู่ใต้เพดานของ LINE และไม่เกินห้าก้อนต่อ reply', () => {
+    const messages = draftCardMessage(HUGE, DRAFT_ID)
+    expect(messages.length).toBeLessThanOrEqual(5)
+    for (const message of messages) {
+      if (message.type !== 'text') throw new Error('ต้องเป็นข้อความ')
+      expect(message.text.length).toBeLessThanOrEqual(5000)
+    }
+  })
+
+  /**
+   * **นี่คือเหตุผลทั้งหมดที่ทางลงนี้มีอยู่** — ข้อความที่กดยืนยันไม่ได้ก็เท่ากับ
+   * ไม่มีการ์ด · postback ติดกับ text message ได้ผ่าน quick reply
+   */
+  it('ยังกดยืนยันได้ — quick reply ถือ postback ตัวเดิม', () => {
+    const messages = draftCardMessage(HUGE, DRAFT_ID)
+    expect(findPostbackData(messages)).toBe(`confirm=${DRAFT_ID}`)
+  })
+
+  /**
+   * LINE แสดง quick reply ของ**ข้อความก้อนสุดท้าย** · ติดไว้ก้อนแรกแล้วมันจะหาย
+   * ไปกับก้อนที่ตามมา
+   */
+  it('quick reply อยู่ก้อนสุดท้าย ไม่ใช่ก้อนแรก', () => {
+    const messages = draftCardMessage(HUGE, DRAFT_ID)
+    const last = messages[messages.length - 1]
+    expect(findPostbackData(last)).toBe(`confirm=${DRAFT_ID}`)
+    expect(findPostbackData(messages.slice(0, -1))).toBeNull()
+  })
+
+  it('ยังไม่รู้ว่าเขาคือใคร → quick reply เป็นตัวเลือกตัวตน ไม่ใช่ปุ่มยืนยัน', () => {
+    const messages = draftCardMessage(HUGE, DRAFT_ID, choices('กอล์ฟ', 'ตูน'))
+    const json = JSON.stringify(messages)
+    expect(json).toContain(`confirm=${DRAFT_ID}&as=`)
+    expect(json).toContain('ฉันเป็นคนใหม่')
+  })
+
+  // D16 — ชื่อทุกคนที่จะโดนหารต้องอยู่ครบ ไม่ว่าการ์ดจะถูกลดรูปแค่ไหน
+  it('ชื่อทุกคนกับยอดของเขาอยู่ครบ', () => {
+    const texts = allText(draftCardMessage(HUGE, DRAFT_ID)).join(LF)
+    for (const line of HUGE.lines) expect(texts).toContain(line.name)
+  })
+
+  it('ก้อนแรกบอกว่าบิลอะไร ยอดเท่าไหร่', () => {
+    const first = allText(draftCardMessage(HUGE, DRAFT_ID)[0]).join(LF)
+    expect(first).toContain('ทริปบริษัท')
+    expect(first).toContain('฿33,330')
+  })
+
+  it('ป้าย (ใหม่) ยังอยู่ — มันคือคำเตือนว่าจะมีคนใหม่เกิดในวงถาวร', () => {
+    const texts = allText(draftCardMessage(HUGE, DRAFT_ID)).join(LF)
+    expect(texts).toContain('เพื่อนหมายเลข 0 (ใหม่)')
+  })
+
+  /**
+   * ป้าย event อยู่บนหัวการ์ดทั้ง bubble และทุกใบของ carousel · หายไปในทางลงแปลว่า
+   * คนตรวจก่อนกดยืนยันไม่เห็นว่าบิลถูกจดเข้าทริปไหน แล้วแท็กที่พิมพ์ผิดจะลง ledger
+   * โดยไม่มีใครทัน — ขัดเกณฑ์ "ลดรูป ไม่ใช่ตัดเนื้อหา" ของทางลงนี้เอง
+   */
+  it('ป้าย event ยังอยู่ในทางลง', () => {
+    const tagged = { ...HUGE, eventTag: 'เชียงใหม่' }
+    const first = allText(draftCardMessage(tagged, DRAFT_ID)[0]).join(LF)
+    expect(first).toContain('#เชียงใหม่')
+  })
+
+  it('ตั้ง LIFF URL แล้ว ทางไปหน้าจดรายชิ้นยังอยู่', () => {
+    const texts = allText(draftCardMessage(HUGE, DRAFT_ID, null, LIFF_URL)).join(LF)
+    expect(texts).toContain(`${LIFF_URL}?draftId=${DRAFT_ID}`)
+  })
+
+  it('ไม่ได้ตั้ง LIFF URL → ไม่มีบรรทัดนั้นเลย ไม่ใช่ลิงก์ที่พัง', () => {
+    const texts = allText(draftCardMessage(HUGE, DRAFT_ID)).join(LF)
+    expect(texts).not.toContain('liff.line.me')
+    // ลิงก์ที่ประกอบจาก null คือลิงก์เสีย ซึ่งแย่กว่าไม่มีบรรทัดนั้นเลย
+    expect(texts).not.toContain('จดรายชิ้น')
+  })
+
+  /**
+   * ใหญ่กว่าที่ระบบนี้ออกแบบมารับไหว — **บอกตรงๆ ว่าตัด** ไม่ใช่เงียบๆ ตัดทิ้ง
+   * ซึ่งในบิลคือคนหายไปจากการหารโดยไม่มีอะไรส่งเสียง
+   */
+  it('ใหญ่จนห้าก้อนยังไม่พอ → บอกว่าตัด ไม่ใช่เงียบ', () => {
+    const messages = draftCardMessage(huge(3000), DRAFT_ID)
+    expect(messages.length).toBeLessThanOrEqual(5)
+    expect(allText(messages).join(LF)).toContain('ยาวเกินกว่าจะส่งในครั้งเดียว')
+    // บิลที่ใหญ่จนต้องตัดคือบิลที่คนอยากเปิดหน้าจอไปแก้ที่สุด — ลิงก์ห้ามหายไปกับส่วนที่ถูกตัด
+    const withLiff = draftCardMessage(huge(3000), DRAFT_ID, null, LIFF_URL)
+    expect(allText(withLiff).join(LF)).toContain(`${LIFF_URL}?draftId=${DRAFT_ID}`)
+    // ถึงจะตัด ก็ยังต้องกดยืนยันได้
+    expect(findPostbackData(messages)).toBe(`confirm=${DRAFT_ID}`)
+  })
+
+  /**
+   * **ด่านที่ห้ามพัง** — ไม่ว่าบิลจะใหญ่แค่ไหน สิ่งที่คืนออกไปต้องเป็นของที่ LINE
+   * รับได้เสมอ · ค่าที่ยิงคือขนาดรอบๆ จุดที่รูปแบบเปลี่ยน
+   */
+  it('ทุกขนาดของวง คืนของที่ LINE รับได้เสมอ และกดยืนยันได้เสมอ', () => {
+    for (const count of [1, 2, 30, 40, 200, 340, 360, 400, 800, 1500, 3000, 8000]) {
+      const messages = draftCardMessage(huge(count), DRAFT_ID, null, LIFF_URL)
+      expect(messages.length).toBeGreaterThan(0)
+      expect(messages.length).toBeLessThanOrEqual(5)
+      for (const message of messages) {
+        const bytes = Buffer.byteLength(JSON.stringify(message), 'utf8')
+        expect(bytes).toBeLessThanOrEqual(50_000)
+        if (message.type === 'text') expect(message.text.length).toBeLessThanOrEqual(5000)
+      }
+      expect(findPostbackData(messages)).toBe(`confirm=${DRAFT_ID}`)
+    }
   })
 })

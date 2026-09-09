@@ -253,15 +253,13 @@ async function messagesFor(event: LineEvent, deps: LineWebhookDeps): Promise<Lin
     spentAt: bangkokDate(event.timestamp),
   })
   // ยังไม่รู้ว่าเขาคือใคร = การ์ดมีแถวเลือกตัวตนแทนปุ่มยืนยัน (D29 / ADR 0002)
-  return [
-    draftCardMessage(
-      outcome.card,
-      draftId,
-      // ยังไม่รู้ว่าเขาคือใคร = การ์ดมีแถวเลือกตัวตนแทนปุ่มยืนยัน (D29 / ADR 0002)
-      view.payerName === null ? view.unclaimed : null,
-      deps.liffUrl ?? null,
-    ),
-  ]
+  return draftCardMessage(
+    outcome.card,
+    draftId,
+    // ยังไม่รู้ว่าเขาคือใคร = การ์ดมีแถวเลือกตัวตนแทนปุ่มยืนยัน (D29 / ADR 0002)
+    view.payerName === null ? view.unclaimed : null,
+    deps.liffUrl ?? null,
+  )
 }
 
 /**
@@ -290,14 +288,12 @@ async function refreshedCard(
 
   // **มุมของเจ้าของ draft ไม่ใช่ของคนแปะลิงก์** — แถวเลือกตัวตนถามว่าคนพิมพ์คือใคร
   const view = await deps.loadGroupView(lineGroupId, found.lineUserId)
-  return [
-    draftCardMessage(
-      draftCardOf(found.draft, found.lines),
-      draftId,
-      view.payerName === null ? view.unclaimed : null,
-      deps.liffUrl ?? null,
-    ),
-  ]
+  return draftCardMessage(
+    draftCardOf(found.draft, found.lines),
+    draftId,
+    view.payerName === null ? view.unclaimed : null,
+    deps.liffUrl ?? null,
+  )
 }
 
 /**

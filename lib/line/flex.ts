@@ -14,7 +14,7 @@
 
 import { formatSatang } from '../money'
 import type { BalanceBlock } from '../flow/balance'
-import type { LineMessage } from './messages'
+import type { LineMessage, LineTextMessage } from './messages'
 import type { DraftCard } from '../flow/draft'
 import type { BillRow } from '../flow/bills'
 
@@ -74,7 +74,7 @@ type FlexButton = {
 
 type FlexComponent = FlexText | FlexBox | FlexSeparator | FlexButton
 
-type QuickReplyItem = {
+export type QuickReplyItem = {
   type: 'action'
   action: { type: 'postback'; label: string; data: string; displayText: string }
 }
@@ -433,7 +433,7 @@ export function draftCardMessage(
   draftId: string,
   unclaimed: readonly IdentityChoice[] | null = null,
   liffUrl: string | null = null,
-): LineFlexMessage {
+): LineMessage[] {
   const description = shorten(card.description, MAX_DESCRIPTION)
   const header: FlexComponent[] = [
     {
@@ -549,7 +549,7 @@ export function draftCardMessage(
       : { quickReply: { items: identityQuickReply(draftId, unclaimed) } }),
     contents: { type: 'bubble', body, footer },
   }
-  if (Buffer.byteLength(JSON.stringify(message), 'utf8') <= MAX_BUBBLE_BYTES) return message
+  if (Buffer.byteLength(JSON.stringify(message), 'utf8') <= MAX_BUBBLE_BYTES) return [message]
 
   /**
    * **วงใหญ่จนใส่ bubble เดียวไม่ไหว — เลื่อนข้างแทนที่จะไม่มีการ์ดเลย** (D52)
@@ -570,10 +570,105 @@ export function draftCardMessage(
       contents: { type: 'carousel', contents: withFooter },
     }
     if (Buffer.byteLength(JSON.stringify(carousel), 'utf8') <= MAX_CAROUSEL_BYTES) {
-      return carousel
+      return [carousel]
     }
   }
-  return message
+
+  /**
+   * **ทางลงสุดท้าย — ลดรูปเป็นข้อความ ไม่ใช่คืน bubble ที่ LINE ปฏิเสธ** (D59)
+   *
+   * ก่อนหน้านี้บรรทัดนี้คือ `return message` ซึ่งเป็น bubble ใบเกินเพดาน · LINE
+   * ปฏิเสธ reply ทั้งก้อน แล้วผลคือ **แถว draft ถูกเขียนไปแล้วแต่ไม่มีการ์ดให้ใครกด**
+   * กู้ไม่ได้จนกว่าจะหมดอายุ 24 ชั่วโมง และพิมพ์ใหม่ก็ได้ผลเดิมเพราะบิลใบเดิม
+   *
+   * เกณฑ์เดียวกับ `balanceCardMessage`: **ลดรูป ไม่ใช่ตัดเนื้อหา** (D16 ห้ามให้ชื่อ
+   * ใครหายจากบิลเงียบๆ)
+   *
+   * **quick reply คือสิ่งเดียวที่ทำให้ข้อความนี้ยังเป็นการ์ดได้** — postback ติดกับ
+   * text message ได้ทางนี้ · ข้อความที่กดยืนยันไม่ได้เท่ากับไม่มีการ์ดเลย
+   */
+  const chunks: string[] = []
+  /**
+   * **ป้าย event อยู่บนหัวด้วย** — มันอยู่บนหัวของทั้ง bubble และทุกใบของ carousel ·
+   * ตกหล่นตรงนี้แปลว่าคนตรวจก่อนกดยืนยันไม่เห็นว่าบิลถูกจดเข้าทริปไหน แล้วแท็กที่
+   * พิมพ์ผิดจะลง ledger โดยไม่มีใครทัน ซึ่งคือการตัดเนื้อหา ไม่ใช่การลดรูป
+   */
+  const tag = card.eventTag === undefined ? '' : ` #${card.eventTag}`
+  let current = `ตรวจบิล ${description}${tag} ${baht(card.totalSatang)} · ${card.lines.length} คน`
+
+  const push = (line: string): void => {
+    // +1 สำหรับตัวขึ้นบรรทัดที่จะต่อเข้าไป
+    if (current.length + line.length + 1 > MAX_TEXT) {
+      chunks.push(current)
+      current = line
+    } else {
+      current = current + LF + line
+    }
+  }
+
+  push('')
+  for (const line of card.lines) {
+    const name = shorten(line.name, MAX_NAME)
+    push(`${line.isNew ? `${name} (ใหม่)` : name} ${baht(line.amountSatang)}`)
+  }
+  push('')
+  push(
+    unclaimed === null
+      ? 'บิลนี้ใหญ่เกินกว่าจะแสดงเป็นการ์ด กดยืนยันจากปุ่มด้านล่าง'
+      : 'บิลนี้ใหญ่เกินกว่าจะแสดงเป็นการ์ด เลือกชื่อของคุณจากปุ่มด้านล่างเพื่อยืนยัน',
+  )
+  // ปุ่มจดรายชิ้นเป็น URI ซึ่ง quick reply ของเราไม่รับ — ลิงก์จึงอยู่ในเนื้อข้อความ
+  if (liffUrl !== null) push(`จดรายชิ้น: ${liffUrl}?draftId=${draftId}`)
+  chunks.push(current)
+
+  /**
+   * ใหญ่กว่าที่ระบบนี้ออกแบบมารับไหว — **บอกตรงๆ ว่าตัด** ไม่ใช่เงียบๆ ตัดทิ้ง
+   * ซึ่งในบิลคือคนหายไปจากการหารโดยไม่มีอะไรส่งเสียง · ก้อนสุดท้ายต้องเป็นก้อนที่
+   * บอกว่าตัด เพราะ quick reply ไปเกาะก้อนสุดท้ายเสมอ
+   */
+  const kept =
+    chunks.length > MAX_MESSAGES
+      ? [
+          ...chunks.slice(0, MAX_MESSAGES - 1),
+          `ยังมีอีก ${chunks.length - (MAX_MESSAGES - 1)} ส่วนที่ยาวเกินกว่าจะส่งในครั้งเดียว` +
+            LF +
+            (unclaimed === null
+              ? 'กดยืนยันจากปุ่มด้านล่างได้เลย ยอดที่ลงบิลคิดจากทุกคนครบ'
+              : 'เลือกชื่อของคุณจากปุ่มด้านล่างได้เลย ยอดที่ลงบิลคิดจากทุกคนครบ') +
+            /**
+             * **ลิงก์ต้องมาอยู่ก้อนนี้ด้วย** — มันถูก push ไว้ท้ายสุด จึงตกอยู่ใน
+             * ส่วนที่เพิ่งถูกตัดทิ้งเสมอ · บิลที่ใหญ่จนต้องตัดคือบิลที่คนอยากเปิด
+             * หน้าจอไปแก้มากที่สุด และข้อความนี้เป็นทางเดียวที่เหลือ (quick reply
+             * ของเราไม่รับ URI action)
+             */
+            (liffUrl === null ? '' : `${LF}จดรายชิ้น: ${liffUrl}?draftId=${draftId}`),
+        ]
+      : chunks
+
+  return kept.map((text, index) => {
+    const message: LineTextMessage = { type: 'text', text }
+    // LINE แสดง quick reply ของก้อนสุดท้าย — ติดไว้ก้อนอื่นแล้วมันหายไปกับก้อนถัดมา
+    if (index < kept.length - 1) return message
+    return {
+      ...message,
+      quickReply: {
+        items:
+          unclaimed === null
+            ? [
+                {
+                  type: 'action' as const,
+                  action: {
+                    type: 'postback' as const,
+                    label: 'ยืนยัน',
+                    data: `confirm=${draftId}`,
+                    displayText: 'ยืนยัน',
+                  },
+                },
+              ]
+            : identityQuickReply(draftId, unclaimed),
+      },
+    }
+  })
 }
 
 /**
