@@ -11,9 +11,10 @@
 
 import { fetchDisplayName, replyToLine } from '@/lib/line/client'
 import { readAccessToken, readChannelSecret } from '@/lib/line/env'
+import { liffUrlOf } from '@/lib/liff/echo'
 import { handleLineWebhook } from '@/lib/line/webhook'
 import { confirmDraft } from '@/lib/repo/confirm'
-import { createDraft } from '@/lib/repo/drafts'
+import { createDraft, findDraftInScope } from '@/lib/repo/drafts'
 import { loadBalance, loadBillDetail, loadBillList, loadGroupView } from '@/lib/repo/views'
 
 /**
@@ -29,14 +30,6 @@ export const dynamic = 'force-dynamic'
  * region ตั้งที่ `vercel.json` (`sin1`) ไม่ใช่ที่ไฟล์นี้ — `preferredRegion` ของ
  * route segment ถูก deprecate ใน Next 16 แล้ว
  */
-
-/** `1234567890-AbCdEfGh` → `https://liff.line.me/1234567890-AbCdEfGh` */
-function liffUrl(raw: string | undefined): string | null {
-  const liffId = (raw ?? '').trim()
-  // รูปของ LIFF ID คือ `<channelId ตัวเลข>-<suffix>` — ค่าที่ผิดรูปคือลิงก์เสีย
-  // บนการ์ดในกลุ่ม ซึ่งแย่กว่าการ์ดที่ไม่มีปุ่มนั้น
-  return /^[0-9]+-[A-Za-z0-9]+$/.test(liffId) ? `https://liff.line.me/${liffId}` : null
-}
 
 export async function POST(request: Request): Promise<Response> {
   const { secret: channelSecret, hadSurroundingWhitespace } = readChannelSecret(
@@ -81,7 +74,7 @@ export async function POST(request: Request): Promise<Response> {
        * env ตัวที่สองสำหรับฝั่ง server · ไม่ได้ตั้ง = การ์ดไม่มีปุ่มนั้น ไม่ใช่
        * บอทพัง
        */
-      liffUrl: liffUrl(process.env.NEXT_PUBLIC_LIFF_ID),
+      liffUrl: liffUrlOf(process.env.NEXT_PUBLIC_LIFF_ID),
       reply: async (replyToken, messages) =>
         canReply
           ? replyToLine({ replyToken, messages, accessToken }, { fetch })
@@ -106,6 +99,18 @@ export async function POST(request: Request): Promise<Response> {
       loadBalance,
       loadBillList,
       loadBillDetail,
+      /**
+       * D58 — วาดการ์ดใบเดิมใหม่หลังคนแก้รายการจากหน้าจอ LIFF
+       *
+       * ไม่มีด่าน `canReply` แบบ `saveDraft` เพราะเส้นนี้อ่านอย่างเดียว ไม่มีอะไร
+       * ถูกเขียนทิ้งไว้ให้ค้างถ้าตอบกลับไม่ได้
+       */
+      refreshDraft: async (input) => {
+        const record = await findDraftInScope(input)
+        return record === null
+          ? 'not-found'
+          : { lineUserId: record.lineUserId, draft: record.draft, lines: record.lines }
+      },
     },
   )
 

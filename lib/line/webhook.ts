@@ -19,6 +19,7 @@ import {
 } from './flex'
 import { verifyLineSignature } from './signature'
 import { stripMentions } from './mention'
+import { readDraftEcho } from '../liff/echo'
 import { renderReply, type LineMessage } from './messages'
 import type { BalanceView } from '../flow/balance'
 import {
@@ -27,7 +28,7 @@ import {
   type BillDetailInput,
   type BillListInput,
 } from '../flow/bills'
-import { buildDraft } from '../flow/draft'
+import { buildDraft, draftCardOf } from '../flow/draft'
 import { decideReply, type Surface } from '../flow/dispatch'
 import { parseAddressedMessage, parseMessage } from '../parser/rules'
 import { bangkokDate } from '../time'
@@ -127,6 +128,24 @@ export interface LineWebhookDeps {
     lineGroupId: string | null
     lineUserId: string
   }) => Promise<BillDetailInput | 'not-found' | 'voided'>
+  /**
+   * draft ใบเดิมสำหรับวาดการ์ดใหม่หลังคนแก้รายการจากหน้าจอ LIFF (D58)
+   *
+   * **รับวงกับคนขอไปด้วย ไม่ใช่แค่ id** — id มาจากลิงก์ในข้อความแชท ซึ่งใครก็แปะ
+   * ซ้ำหรือแปะข้ามกลุ่มได้ · ด่านที่กันการดูข้ามวงอยู่ที่ repo ด้วยเกณฑ์เดียวกับ
+   * `loadBillDetail`
+   *
+   * คืน `lineUserId` ของ **เจ้าของ draft** มาด้วย เพราะการ์ดต้องวาดจากมุมของเขา
+   * ไม่ใช่มุมของคนที่แปะลิงก์ (D29 / ADR 0002)
+   */
+  refreshDraft: (input: {
+    draftId: string
+    lineGroupId: string | null
+    lineUserId: string
+  }) => Promise<
+    | { lineUserId: string; draft: ExpenseDraft; lines: readonly DraftLine[] }
+    | 'not-found'
+  >
   /** นาฬิกาหน่วย ms — แยกออกมาเพื่อให้เทสต์กำหนดค่าได้ */
   now?: () => number
 }
@@ -172,6 +191,16 @@ async function messagesFor(event: LineEvent, deps: LineWebhookDeps): Promise<Lin
   if (event.kind === 'postback') return messagesForPostback(event, deps)
 
   const surface = surfaceOf(event)
+
+  /**
+   * **Trigger ของ D58 มาก่อน parser** — ข้อความนี้ไม่ได้ @mention บอท (ข้อความที่
+   * ส่งผ่าน API สร้าง mention ไม่ได้) กฎเงียบของ D47 จึงจะกลืนมันทิ้งถ้าปล่อยให้
+   * เดินเส้นปกติ · ที่ยกเว้นได้เพราะ**ลิงก์ไปหา LIFF ของบอทเราเองคือการเรียกบอท**
+   * ไม่ใช่คำที่คนในกลุ่มบังเอิญพูดตรงกัน ซึ่งเป็นสิ่งเดียวที่ D47 มาแก้
+   */
+  const echoDraftId = readDraftEcho(event.text, deps.liffUrl)
+  if (echoDraftId !== null) return refreshedCard(event, echoDraftId, deps)
+
   const { text, mentionsBot } = stripMentions(event.text, event.mentionees)
   const parsed = mentionsBot ? parseAddressedMessage(text) : parseMessage(text)
   const plan = decideReply({ surface, addressed: mentionsBot }, parsed)
@@ -229,6 +258,42 @@ async function messagesFor(event: LineEvent, deps: LineWebhookDeps): Promise<Lin
       outcome.card,
       draftId,
       // ยังไม่รู้ว่าเขาคือใคร = การ์ดมีแถวเลือกตัวตนแทนปุ่มยืนยัน (D29 / ADR 0002)
+      view.payerName === null ? view.unclaimed : null,
+      deps.liffUrl ?? null,
+    ),
+  ]
+}
+
+/**
+ * วาดการ์ด Draft ใบเดิมใหม่ด้วยยอดที่เพิ่งเซฟจากหน้าจอ LIFF (D58)
+ *
+ * **ไม่แตะ draft เลย** — เส้นนี้อ่านอย่างเดียว การเซฟเกิดไปแล้วที่ `/api/liff/draft`
+ * และการยืนยันยังอยู่บนปุ่มในแชทเหมือนเดิม (D57)
+ */
+async function refreshedCard(
+  event: LineEvent & { kind: 'text' },
+  draftId: string,
+  deps: LineWebhookDeps,
+): Promise<LineMessage[]> {
+  const surface = surfaceOf(event)
+  const lineUserId = event.source.lineUserId
+  // ด่านเดียวกับทุกเส้นที่ต้องรู้ว่าใครพูด — ขอบเขตของ 1:1 คิดจากตัวคนขอ
+  if (lineUserId === null) return renderReply({ kind: 'unknown-sender' }, surface)
+
+  const lineGroupId = event.source.kind === 'group' ? event.source.lineGroupId : null
+  const found = await deps.refreshDraft({ draftId, lineGroupId, lineUserId })
+  /**
+   * หมดอายุ ถูกกดไปแล้ว หรืออยู่คนละวง — จบเหมือนกันหมดและ**ต้องไม่เงียบ** คนที่
+   * เพิ่งกดเซฟกำลังรอการ์ดอยู่ ความเงียบตรงนี้อ่านออกได้อย่างเดียวว่าบอทพัง
+   */
+  if (found === 'not-found') return renderReply({ kind: 'draft-gone' }, surface)
+
+  // **มุมของเจ้าของ draft ไม่ใช่ของคนแปะลิงก์** — แถวเลือกตัวตนถามว่าคนพิมพ์คือใคร
+  const view = await deps.loadGroupView(lineGroupId, found.lineUserId)
+  return [
+    draftCardMessage(
+      draftCardOf(found.draft, found.lines),
+      draftId,
       view.payerName === null ? view.unclaimed : null,
       deps.liffUrl ?? null,
     ),

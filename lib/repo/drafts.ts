@@ -198,6 +198,46 @@ export async function findDraft(id: string, dbOrTx?: Queryable): Promise<DraftRe
   return row === undefined ? null : toDraftRecord(row)
 }
 
+export interface FindDraftInScopeInput {
+  draftId: string
+  /** `null` = คำขอมาจากแชท 1:1 */
+  lineGroupId: string | null
+  lineUserId: string
+}
+
+/**
+ * อ่าน draft **เฉพาะที่อยู่ในขอบเขตของคนขอ** — ตัวอ่านของ Trigger `จดรายชิ้นแล้ว`
+ * (D58) ซึ่งรับ id มาจากลิงก์ในข้อความแชท ที่ใครก็แปะซ้ำหรือแปะข้ามกลุ่มได้
+ *
+ * **ขอบเขตคือวง ไม่ใช่เจ้าของ** — ต่างจาก `authorizeDraft` ที่เทียบ `line_user_id`
+ * ตรงๆ ตาม D26 · เส้นทางนั้นคือการ **แก้** บิล ส่วนเส้นนี้คือการวาดการ์ดใบเดิม
+ * ให้เห็นอีกครั้ง ซึ่งเป็นการ์ดที่ลอยอยู่ในกลุ่มให้ทุกคนเห็นมาตั้งแต่ต้นแล้ว ·
+ * บังคับเจ้าของตรงนี้แปลว่าคนอื่นแปะลิงก์แล้วบอทเงียบ ซึ่งอ่านออกได้ว่าบอทพัง
+ *
+ * แชท 1:1 ไม่มีวงให้ใช้เป็นขอบเขต จึงต้องเทียบตัวคนพิมพ์แทน — เกณฑ์เดียวกับที่
+ * `createDraft` เขียนไว้ว่าทำไม predicate ของสองที่นี้ถึงหน้าตาไม่เหมือนกัน
+ */
+export async function findDraftInScope(
+  input: FindDraftInScopeInput,
+  dbOrTx?: Queryable,
+): Promise<DraftRecord | null> {
+  // id มาจากข้อความในแชทซึ่งใครก็พิมพ์ได้ — ดู `isUuid`
+  if (!isUuid(input.draftId)) return null
+
+  const scope =
+    input.lineGroupId === null
+      ? { where: `line_group_id is null and line_user_id = $2`, value: input.lineUserId }
+      : { where: `line_group_id = $2`, value: input.lineGroupId }
+
+  const result = await db(dbOrTx).query<DraftRow>(
+    `select * from expense_draft
+     where id = $1 and created_at > now() - ${TTL} and ${scope.where}`,
+    [input.draftId, scope.value],
+  )
+  const row = result.rows[0]
+  return row === undefined ? null : toDraftRecord(row)
+}
+
 /**
  * ลบ draft — คืน `true` เมื่อลบไปจริงหนึ่งแถว
  *
