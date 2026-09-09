@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { PAYER_LABEL, buildDraft } from './draft'
-import type { ExpenseDraft } from '../types'
+import { PAYER_LABEL, buildDraft, draftCardOf } from './draft'
+import type { DraftLine, ExpenseDraft } from '../types'
 
 function draft(overrides: Partial<ExpenseDraft> = {}): ExpenseDraft {
   return {
@@ -240,5 +240,45 @@ describe('buildDraft — แถวไหนเป็นของคนพิม�
     )
     if (result.kind !== 'card') throw new Error('ต้องได้การ์ด')
     expect(result.card.lines.some((l) => l.isPayer)).toBe(false)
+  })
+})
+
+describe('draftCardOf — วาดการ์ดใบเดิมใหม่จาก draft ที่เก็บไว้ (D58)', () => {
+  const lines: DraftLine[] = [
+    { name: 'กอล์ฟ', amountSatang: 60000, isNew: false, isPayer: true },
+    { name: 'ตูน', amountSatang: 70000, isNew: true, isPayer: false },
+  ]
+
+  it('ชื่อบิลมาจาก draft ที่เก็บไว้', () => {
+    expect(draftCardOf(draft({ description: 'หมูกระทะ' }), lines).description).toBe('หมูกระทะ')
+  })
+
+  /**
+   * **ยอดบนหัวการ์ดคือผลรวมของแถว ไม่ใช่ `draft.totalSatang`** — บิล itemized ที่
+   * เซฟจากหน้าจอเก็บ `totalSatang` เป็นยอดก่อนส่วนปรับ (D54) ส่วนแถวรวมกันได้
+   * ยอดที่จ่ายจริง · หยิบผิดตัวแปลว่าหัวการ์ดไม่ตรงกับผลบวกที่อยู่ใต้มันเอง
+   */
+  it('ยอดหัวการ์ดเท่ากับผลรวมของแถว ไม่ใช่ยอดก่อนส่วนปรับ', () => {
+    const stored = draft({ totalSatang: 120000, adjustmentSatang: 10000, mode: 'itemized' })
+    expect(draftCardOf(stored, lines).totalSatang).toBe(130000)
+  })
+
+  it('แถวรอดมาครบทั้งป้าย (ใหม่) และป้ายคนจ่าย', () => {
+    expect(draftCardOf(draft(), lines).lines).toEqual(lines)
+  })
+
+  it('ป้าย event รอดมาด้วย', () => {
+    expect(draftCardOf(draft({ eventTag: 'เชียงใหม่' }), lines).eventTag).toBe('เชียงใหม่')
+  })
+
+  // `exactOptionalPropertyTypes` เปิดอยู่ — คีย์ที่ไม่มีต้องไม่โผล่มาเป็น undefined
+  it('ไม่มีป้าย event = ไม่มีคีย์นั้นเลย', () => {
+    expect('eventTag' in draftCardOf(draft(), lines)).toBe(false)
+  })
+
+  it('แถวที่ส่งเข้าไปไม่ถูกแก้ — การ์ดถือสำเนาของตัวเอง', () => {
+    const card = draftCardOf(draft(), lines)
+    card.lines.push({ name: 'แจน', amountSatang: 1, isNew: true, isPayer: false })
+    expect(lines).toHaveLength(2)
   })
 })

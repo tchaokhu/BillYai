@@ -123,14 +123,26 @@ export function buildDraft(
     isPayer: line.isPayer,
   }))
 
+  return { kind: 'card', card: draftCardOf(draft, cardLines) }
+}
+
+/**
+ * เนื้อหาการ์ดจาก draft ที่**คำนวณยอดรายคนไว้แล้ว** — ใช้ตอนวาดการ์ดใบเดิมใหม่
+ * หลังคนแก้รายการจากหน้าจอ LIFF (D58)
+ *
+ * ไม่หารซ้ำโดยตั้งใจ: แถวที่เก็บไว้คือชุดเดียวกับที่ `commitExpense` จะลง ledger
+ * หารใหม่ตรงนี้แปลว่ามีเลขสองชุดที่ต้องตรงกัน แล้ววันหนึ่งมันจะไม่ตรง
+ *
+ * **ยอดหัวการ์ดคือผลรวมของแถว ไม่ใช่ `draft.totalSatang`** — บิล itemized เก็บ
+ * `totalSatang` เป็นยอดก่อนส่วนปรับ (D54) ส่วนแถวรวมกันได้ยอดที่จ่ายจริง
+ */
+export function draftCardOf(draft: ExpenseDraft, lines: readonly DraftLine[]): DraftCard {
   const card: DraftCard = {
     description: draft.description,
-    totalSatang: cardLines.reduce((total, line) => total + line.amountSatang, 0),
-    lines: cardLines,
+    totalSatang: lines.reduce((total, line) => total + line.amountSatang, 0),
+    lines: [...lines],
   }
 
   // `exactOptionalPropertyTypes` เปิดอยู่ — คีย์ที่ไม่มีต้องไม่โผล่มาเป็น undefined
-  return draft.eventTag === undefined
-    ? { kind: 'card', card }
-    : { kind: 'card', card: { ...card, eventTag: draft.eventTag } }
+  return draft.eventTag === undefined ? card : { ...card, eventTag: draft.eventTag }
 }

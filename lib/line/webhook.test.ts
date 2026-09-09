@@ -4,10 +4,35 @@ import { handleLineWebhook } from './webhook'
 import type { LineMessage } from './messages'
 import type { ReplyOutcome } from './client'
 import type { LineWebhookDeps } from './webhook'
+import { draftEchoText } from '../liff/echo'
+import type { DraftLine, ExpenseDraft } from '../types'
 
 const SECRET = 'test-channel-secret-not-a-real-one'
 const GROUP_ID = 'Cffffffffffffffffffffffffffffffff'
 const USER_ID = 'Uffffffffffffffffffffffffffffffff'
+/** คนพิมพ์บิล — คนละคนกับ `USER_ID` โดยตั้งใจ เพื่อพิสูจน์ว่าการ์ดวาดจากมุมของเจ้าของ */
+const OWNER_ID = 'U0000000000000000000000000000owner'
+const LIFF_URL = 'https://liff.line.me/1234567890-AbCdEfGh'
+const DRAFT_ID = '3f7c1a2e-9b45-4d10-8c3e-77a1b2c3d4e5'
+
+/** บิล itemized ที่เพิ่งถูกเซฟจากหน้าจอ — ยอดคนละชุดกับที่การ์ดใบเก่าโชว์ */
+const SAVED_DRAFT: ExpenseDraft = {
+  description: 'ข้าวเย็น',
+  totalSatang: 120000,
+  mode: 'itemized',
+  participants: [
+    { name: 'กอล์ฟ', weight: 1 },
+    { name: 'ตูน', weight: 1 },
+  ],
+  includesPayer: true,
+  adjustmentSatang: 0,
+  items: [{ name: 'ข้าว', amountSatang: 120000, eaterNames: ['กอล์ฟ', 'ตูน'] }],
+}
+
+const SAVED_LINES: DraftLine[] = [
+  { name: 'กอล์ฟ', amountSatang: 50000, isNew: false, isPayer: true },
+  { name: 'ตูน', amountSatang: 70000, isNew: false, isPayer: false },
+]
 
 function sign(body: string): string {
   return createHmac('sha256', SECRET).update(body, 'utf8').digest('base64')
@@ -59,11 +84,19 @@ function fakeDb(roster: readonly string[] = [], payerName: string | null = null)
     detailAsked.push(input)
     return 'not-found'
   })
+  /** ทุกคำขอวาดการ์ดใหม่ — ใช้ตรวจว่าวงกับคนขอถูกส่งไปให้ repo จริง (D58) */
+  const refreshAsked: Array<Parameters<LineWebhookDeps['refreshDraft']>[0]> = []
+  const refreshDraft = vi.fn<LineWebhookDeps['refreshDraft']>(async (input) => {
+    refreshAsked.push(input)
+    return { lineUserId: OWNER_ID, draft: SAVED_DRAFT, lines: SAVED_LINES }
+  })
   return {
     saved,
     viewed,
     confirmed,
     detailAsked,
+    refreshAsked,
+    refreshDraft,
     loadGroupView,
     saveDraft,
     confirmDraft,
@@ -152,6 +185,7 @@ async function run(
       loadBalance: db.loadBalance,
       loadBillList: db.loadBillList,
       loadBillDetail: db.loadBillDetail,
+      refreshDraft: db.refreshDraft,
       now: fakeClock(),
       ...overrides,
     },
@@ -479,6 +513,7 @@ describe('handleLineWebhook — DB ล่มตอนยังไม่ได้
         fetchDisplayName: async () => null,
         loadBalance: async () => 'no-bills' as const,
       loadBillList: async () => 'no-bills' as const,
+        refreshDraft: async () => 'not-found' as const,
       loadBillDetail: async () => 'not-found' as const,
         now: fakeClock(),
       },
@@ -502,6 +537,7 @@ describe('handleLineWebhook — DB ล่มตอนยังไม่ได้
         fetchDisplayName: async () => null,
         loadBalance: async () => 'no-bills' as const,
       loadBillList: async () => 'no-bills' as const,
+        refreshDraft: async () => 'not-found' as const,
       loadBillDetail: async () => 'not-found' as const,
         now: fakeClock(),
       },
@@ -527,6 +563,7 @@ describe('handleLineWebhook — DB ล่มตอนยังไม่ได้
         fetchDisplayName: async () => null,
         loadBalance: async () => 'no-bills' as const,
       loadBillList: async () => 'no-bills' as const,
+        refreshDraft: async () => 'not-found' as const,
       loadBillDetail: async () => 'not-found' as const,
         now: fakeClock(),
       },
@@ -553,6 +590,7 @@ describe('handleLineWebhook — DB ล่มตอนยังไม่ได้
         fetchDisplayName: async () => null,
         loadBalance: async () => 'no-bills' as const,
       loadBillList: async () => 'no-bills' as const,
+        refreshDraft: async () => 'not-found' as const,
       loadBillDetail: async () => 'not-found' as const,
         now: fakeClock(),
       },
@@ -866,5 +904,120 @@ describe('handleLineWebhook — กดแถวในรายการบิล
   it('`confirm=` ยังทำงานเหมือนเดิม — สอง key แยกกันได้', async () => {
     const { confirmed } = await run([postback('confirm=draft-1')])
     expect(confirmed).toHaveLength(1)
+  })
+})
+
+/**
+ * Trigger `จดรายชิ้นแล้ว` (D58) — หน้าจอ LIFF ส่ง **text** เข้าแชทหลังเซฟ แล้วบอท
+ * ตอบการ์ดใบใหม่ด้วย reply token · Flex ที่ส่งด้วย `liff.sendMessages()` ไม่เกิด
+ * webhook เลย หน้าจอจึงยิงการ์ดเองไม่ได้
+ */
+describe('handleLineWebhook — วาดการ์ดใหม่หลังแก้รายการจากหน้าจอ (D58)', () => {
+  const echo = draftEchoText({ description: 'ข้าวเย็น', liffUrl: LIFF_URL, draftId: DRAFT_ID })
+
+  it('ตอบการ์ด ไม่ใช่เงียบ ทั้งที่ข้อความไม่ได้ @mention บอท', async () => {
+    const { calls } = await run([groupText(echo)], undefined, [], { liffUrl: LIFF_URL })
+    expect(calls).toHaveLength(1)
+    expect(calls[0]?.messages[0]?.type).toBe('flex')
+  })
+
+  it('การ์ดถือยอดชุดใหม่ที่เพิ่งเซฟ และ id เดิมของ draft', async () => {
+    const { calls } = await run([groupText(echo)], undefined, [], { liffUrl: LIFF_URL })
+    const json = JSON.stringify(calls[0]?.messages)
+    expect(json).toContain('฿500')
+    expect(json).toContain('฿700')
+    // หัวการ์ดคือผลรวมของแถว
+    expect(json).toContain('฿1,200')
+    expect(json).toContain(DRAFT_ID)
+  })
+
+  it('ขอ draft ตามวงที่ข้อความมา พร้อมบอกว่าใครขอ', async () => {
+    const { refreshAsked } = await run([groupText(echo)], undefined, [], { liffUrl: LIFF_URL })
+    expect(refreshAsked).toEqual([
+      { draftId: DRAFT_ID, lineGroupId: GROUP_ID, lineUserId: USER_ID },
+    ])
+  })
+
+  it('แชท 1:1 ไม่มีวงให้ขอ', async () => {
+    const { refreshAsked } = await run([directText(echo)], undefined, [], { liffUrl: LIFF_URL })
+    expect(refreshAsked[0]?.lineGroupId).toBeNull()
+  })
+
+  /**
+   * **การ์ดเป็นของเจ้าของ draft ไม่ใช่ของคนที่แปะลิงก์** — แถวเลือกตัวตนกับป้าย
+   * `(ใหม่)` ตอบคำถามว่า "คนพิมพ์คือใครในวงนี้" (D29 / ADR 0002) · อ่านวงจากมุมของ
+   * คนแปะแปลว่าการ์ดของกอล์ฟจะไปถามตูนว่าเขาเป็นใคร
+   */
+  it('อ่านวงจากมุมของเจ้าของ draft ไม่ใช่คนที่แปะลิงก์', async () => {
+    const { viewed } = await run([groupText(echo)], undefined, [], { liffUrl: LIFF_URL })
+    expect(viewed).toEqual([{ lineGroupId: GROUP_ID, lineUserId: OWNER_ID }])
+  })
+
+  it('เจ้าของยังไม่ยืนยันตัวตน → การ์ดมีแถวเลือกตัวตน ไม่ใช่ปุ่มยืนยัน', async () => {
+    const { calls } = await run([groupText(echo)], undefined, ['กอล์ฟ', 'ตูน'], {
+      liffUrl: LIFF_URL,
+    })
+    expect(JSON.stringify(calls[0]?.messages)).toContain('member-0')
+  })
+
+  it('การ์ดหมดอายุหรืออยู่คนละวง → บอกตรงๆ ไม่เงียบ', async () => {
+    const { calls } = await run([groupText(echo)], undefined, [], {
+      liffUrl: LIFF_URL,
+      refreshDraft: async () => 'not-found',
+    })
+    expect(firstText(calls[0]?.messages ?? [])).toContain('การ์ดใบนี้ใช้ไม่ได้แล้ว')
+  })
+
+  /**
+   * ไม่ได้ตั้ง `NEXT_PUBLIC_LIFF_ID` = ไม่มีที่อยู่ให้เทียบ · ข้อความเดียวกันต้อง
+   * กลับไปเป็นข้อความธรรมดาซึ่งกฎเงียบของกลุ่มจัดการอยู่แล้ว
+   */
+  it('ยังไม่ได้ตั้ง liffUrl → เงียบ ไม่ใช่ตอบมั่ว', async () => {
+    const { calls, refreshAsked } = await run([groupText(echo)])
+    expect(calls).toHaveLength(0)
+    expect(refreshAsked).toHaveLength(0)
+  })
+
+  it('กลุ่มที่ LINE ไม่บอกว่าใครพิมพ์ → บอกตรงๆ ไม่ไปแตะ DB', async () => {
+    const event = {
+      type: 'message',
+      replyToken: 'token-1',
+      timestamp: 1_787_000_000_000,
+      source: { type: 'group', groupId: GROUP_ID },
+      message: { id: '1', type: 'text', text: echo },
+    }
+    const { calls, refreshAsked } = await run([event], undefined, [], { liffUrl: LIFF_URL })
+    expect(refreshAsked).toHaveLength(0)
+    expect(firstText(calls[0]?.messages ?? [])).toContain('ข้อตกลงการใช้งาน')
+  })
+
+  it('ข้อความนี้ไม่ถูกอ่านเป็นบิลใบใหม่ — ไม่มีอะไรถูกเขียนลง DB', async () => {
+    const { saved } = await run([groupText(echo)], undefined, [], { liffUrl: LIFF_URL })
+    expect(saved).toHaveLength(0)
+  })
+
+  /** ลิงก์ของ LIFF app ใบอื่นไม่ใช่การเรียกบอทเรา — D47 ยังคุมข้อความอื่นอยู่ */
+  it('ลิงก์ของ LIFF app ใบอื่นในกลุ่ม → เงียบ', async () => {
+    const other = draftEchoText({
+      description: 'ข้าวเย็น',
+      liffUrl: 'https://liff.line.me/9999999999-ZzZzZzZz',
+      draftId: DRAFT_ID,
+    })
+    const { calls, refreshAsked } = await run([groupText(other)], undefined, [], {
+      liffUrl: LIFF_URL,
+    })
+    expect(refreshAsked).toHaveLength(0)
+    expect(calls).toHaveLength(0)
+  })
+
+  it('DB ล่มตอนขอ draft → 500 ให้ LINE ยิงซ้ำ ไม่ตอบมั่ว', async () => {
+    const { result, calls } = await run([groupText(echo)], undefined, [], {
+      liffUrl: LIFF_URL,
+      refreshDraft: async () => {
+        throw new Error('postgres ล่ม')
+      },
+    })
+    expect(result.status).toBe(500)
+    expect(calls).toHaveLength(0)
   })
 })

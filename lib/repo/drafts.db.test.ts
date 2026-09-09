@@ -12,7 +12,14 @@
 import { randomUUID } from 'node:crypto'
 import { afterAll, describe, expect, it } from 'vitest'
 import { closePool, getPool, withTransaction } from '@/lib/db/client'
-import { createDraft, deleteDraft, findDraft, sweepExpiredDrafts, updateDraft } from './drafts'
+import {
+  createDraft,
+  deleteDraft,
+  findDraft,
+  findDraftInScope,
+  sweepExpiredDrafts,
+  updateDraft,
+} from './drafts'
 import type { DraftLine, ExpenseDraft } from '@/lib/types'
 
 afterAll(async () => {
@@ -334,5 +341,88 @@ describe('updateDraft — หน้าจอเซฟกลับลง draft �
     ).rejects.toThrow('draft ไม่ผ่านสัญญาของ payload')
     // ของเดิมต้องยังอยู่ครบ ไม่ใช่ถูกเขียนทับครึ่งทาง
     expect((await findDraft(created.id))?.draft.description).toBe('ข้าว')
+  })
+})
+
+/**
+ * ตัวอ่านของ Trigger `จดรายชิ้นแล้ว` (D58) — ข้อความมาจากแชท ใครก็แปะลิงก์ซ้ำได้
+ *
+ * ขอบเขตคือ **วง** ไม่ใช่เจ้าของ: การ์ด Draft ลอยอยู่ในกลุ่มให้ทุกคนเห็นอยู่แล้ว
+ * คนอื่นในวงเดียวกันขอให้วาดใหม่จึงไม่ได้เห็นอะไรที่เขายังไม่เคยเห็น · ส่วน 1:1
+ * ไม่มีวงให้เทียบ ขอบเขตจึงเป็นตัวคนพิมพ์เอง
+ */
+describe('findDraftInScope — วาดการ์ดใบเดิมใหม่ ต้องไม่ข้ามวง', () => {
+  it('คนในวงเดียวกันขอได้ ถึงจะไม่ใช่คนพิมพ์', async () => {
+    const lineGroupId = fakeLineGroupId()
+    const created = await createDraft(input({ lineGroupId }))
+    const found = await findDraftInScope({
+      draftId: created.id,
+      lineGroupId,
+      lineUserId: fakeLineUserId(),
+    })
+    expect(found?.id).toBe(created.id)
+  })
+
+  it('วงอื่นขอไม่ได้ — แปะลิงก์ข้ามกลุ่มต้องไม่เห็นบิลของวงนั้น', async () => {
+    const created = await createDraft(input())
+    const found = await findDraftInScope({
+      draftId: created.id,
+      lineGroupId: fakeLineGroupId(),
+      lineUserId: created.lineUserId,
+    })
+    expect(found).toBeNull()
+  })
+
+  it('บิลของกลุ่มขอจากแชท 1:1 ไม่ได้ ถึงจะเป็นคนพิมพ์เอง', async () => {
+    const created = await createDraft(input())
+    const found = await findDraftInScope({
+      draftId: created.id,
+      lineGroupId: null,
+      lineUserId: created.lineUserId,
+    })
+    expect(found).toBeNull()
+  })
+
+  it('บิลใน 1:1 เจ้าของขอได้', async () => {
+    const created = await createDraft(input({ lineGroupId: null }))
+    const found = await findDraftInScope({
+      draftId: created.id,
+      lineGroupId: null,
+      lineUserId: created.lineUserId,
+    })
+    expect(found?.id).toBe(created.id)
+  })
+
+  it('บิลใน 1:1 ของคนอื่นขอไม่ได้ — ไม่มีวงให้ใช้เป็นขอบเขต', async () => {
+    const created = await createDraft(input({ lineGroupId: null }))
+    const found = await findDraftInScope({
+      draftId: created.id,
+      lineGroupId: null,
+      lineUserId: fakeLineUserId(),
+    })
+    expect(found).toBeNull()
+  })
+
+  it('การ์ดที่หมดอายุแล้วไม่ถูกวาดใหม่', async () => {
+    const lineGroupId = fakeLineGroupId()
+    const created = await createDraft(input({ lineGroupId }))
+    await ageDraft(created.id, 25)
+    const found = await findDraftInScope({
+      draftId: created.id,
+      lineGroupId,
+      lineUserId: created.lineUserId,
+    })
+    expect(found).toBeNull()
+  })
+
+  // id ที่ไม่ใช่ uuid ไม่ได้ "หาไม่เจอ" แต่ทำให้ Postgres โยน แล้วกลายเป็น 500
+  it('id ที่ไม่ใช่ uuid คือไม่เจอ ไม่ใช่พัง', async () => {
+    await expect(
+      findDraftInScope({
+        draftId: 'ไม่ใช่ยูยูไอดี',
+        lineGroupId: fakeLineGroupId(),
+        lineUserId: fakeLineUserId(),
+      }),
+    ).resolves.toBeNull()
   })
 })

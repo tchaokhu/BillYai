@@ -27,6 +27,7 @@ import {
 import type { AdjustmentMode, BillState } from '@/lib/liff/bill'
 import { shouldRelogin } from '@/lib/liff/recover'
 import type { LiffSession } from '@/lib/liff/session'
+import { draftEchoText, liffUrlOf } from '@/lib/liff/echo'
 import { formatSatang } from '@/lib/money'
 import type { DraftItem } from '@/lib/types'
 
@@ -41,7 +42,8 @@ import type { DraftItem } from '@/lib/types'
 type Phase =
   | { kind: 'loading' }
   | { kind: 'ready' }
-  | { kind: 'saved' }
+  /** `echoed` = ยิงข้อความเข้าแชทสำเร็จ แล้วบอทกำลังตอบการ์ดใบใหม่ให้ (D58) */
+  | { kind: 'saved'; echoed: boolean }
   | { kind: 'failed'; message: string }
 
 /**
@@ -94,6 +96,35 @@ async function reloginNow(): Promise<void> {
   const { default: liff } = await import('@line/liff')
   liff.logout()
   liff.login({ redirectUri: location.href })
+}
+
+/**
+ * ยิงข้อความสรุปพร้อมลิงก์กลับเข้าแชท เพื่อให้บอทตอบการ์ดใบใหม่ (D58)
+ *
+ * **หน้าจอยิงการ์ดเองไม่ได้** — เอกสาร LINE ระบุว่า Flex ที่ส่งด้วย
+ * `liff.sendMessages()` ตั้งได้เฉพาะ URI action (ปุ่มยืนยันเป็น postback) และ
+ * **ไม่เกิด webhook เลย** · text เกิด webhook ตามปกติ บอทจึงตอบด้วย reply token
+ * ซึ่งไม่กินโควตา push
+ *
+ * **คืน `false` ไม่ใช่โยน** — บิลถูกเซฟไปเรียบร้อยแล้วก่อนถึงบรรทัดนี้ และการ์ดใบ
+ * เดิมในแชทยังกดยืนยันได้ ยอดที่ลง ledger ก็เป็นชุดใหม่อยู่ดี (D57) · ที่ต่างกันคือ
+ * ข้อความท้ายหน้าจอต้องบอกให้เขากลับไปหาการ์ดเอง
+ *
+ * ส่งไม่ได้เมื่อ LIFF app ยังไม่ได้เปิด scope `chat_message.write` หรือหน้าจอถูก
+ * เปิดนอกห้องแชท — ทั้งสองกรณีเป็นการตั้งค่า ไม่ใช่ความผิดของคนที่กด
+ */
+async function announceSave(description: string, draftId: string): Promise<boolean> {
+  const liffUrl = liffUrlOf(process.env.NEXT_PUBLIC_LIFF_ID)
+  if (liffUrl === null) return false
+  try {
+    const { default: liff } = await import('@line/liff')
+    await liff.sendMessages([
+      { type: 'text', text: draftEchoText({ description, liffUrl, draftId }) },
+    ])
+    return true
+  } catch {
+    return false
+  }
 }
 
 /** รูปเดียวกับการ์ดในแชท — `formatSatang` ใส่คอมมาหลักพันให้ด้วย (`฿1,200`) */
@@ -359,7 +390,23 @@ export default function LiffPage() {
       return
     }
     adopt(result.session)
-    setPhase({ kind: 'saved' })
+    /**
+     * **ปิดฟอร์มก่อนรอ `sendMessages` ไม่ใช่หลัง** — `setSaving(false)` เกิดไปแล้ว
+     * ข้างบน และสะพานของ LIFF ใช้เวลาของมัน · รอให้ echo เสร็จก่อนค่อยเปลี่ยน
+     * phase แปลว่าระหว่างนั้นปุ่ม `บันทึกรายการ` ยังกดได้ ซึ่งได้บิลซ้ำใบสอง และ
+     * ถ้าเขาติ๊กเพิ่มระหว่างนั้น `touched()` จะพาจอกลับเป็น `ready` แล้ว
+     * `setPhase` ที่ตามมาทีหลังจะกลบทิ้ง — จอบอกว่าบันทึกแล้วทั้งที่การแก้ครั้ง
+     * สุดท้ายไม่เคยถูกส่ง ซึ่งขัดกฎที่ `touched()` ตั้งไว้เอง
+     */
+    setPhase({ kind: 'saved', echoed: false })
+    const echoed = await announceSave(result.session.draft.description, draftId)
+    /**
+     * **อัปเกรดข้อความแบบมีเงื่อนไข** — เขาอาจแก้อะไรไปแล้วระหว่างรอ ซึ่งพาจอกลับ
+     * เป็น `ready` โดยตั้งใจ · เขียนทับตรงๆ ตรงนี้จะดึงมันกลับไปเป็น "บันทึกแล้ว"
+     */
+    if (echoed) {
+      setPhase((current) => (current.kind === 'saved' ? { kind: 'saved', echoed: true } : current))
+    }
   }
 
   const unnamed = rows.filter((row) => row.name.trim() === '').length
@@ -649,8 +696,23 @@ export default function LiffPage() {
       {saveError !== null && <p className="alarm">{saveError}</p>}
 
       {phase.kind === 'saved' ? (
+        /**
+         * **สองข้อความ ไม่ใช่ข้อความเดียว** — ที่ต่างกันคือเขาต้องหาการ์ดใบไหน ·
+         * ส่งเข้าแชทได้แล้วยังบอกให้ "กลับไปกดการ์ดในแชท" เฉยๆ แปลว่าเขาจะไปเจอ
+         * การ์ดใบเก่าที่ค้างตัวเลขชุดก่อนแก้ ซึ่งเป็นสิ่งเดียวที่ D58 มาแก้
+         */
         <p className="saved">
-          บันทึกแล้ว — <b>กลับไปกดยืนยันบนการ์ดในแชท</b> บิลจะลง ledger ตอนนั้น
+          {phase.echoed ? (
+            <>
+              บันทึกแล้ว — ส่งการ์ดใบใหม่เข้าแชทให้แล้ว <b>กดยืนยันบนการ์ดใบล่าสุด</b>{' '}
+              บิลจะลง ledger ตอนนั้น
+            </>
+          ) : (
+            <>
+              บันทึกแล้ว — <b>กลับไปกดยืนยันบนการ์ดในแชท</b> บิลจะลง ledger ตอนนั้น
+              ด้วยยอดชุดใหม่ ถึงตัวเลขบนการ์ดจะยังเป็นของเดิม
+            </>
+          )}
         </p>
       ) : (
         <button type="button" className="save" disabled={!ready || saving} onClick={() => void save()}>
