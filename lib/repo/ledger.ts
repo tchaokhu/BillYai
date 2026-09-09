@@ -13,7 +13,7 @@
  */
 
 import type { PoolClient } from 'pg'
-import { withTransaction } from '@/lib/db/client'
+import { getPool, withTransaction } from '@/lib/db/client'
 import { assertSatang } from '@/lib/db/rows'
 import { computeDebts, floatOf } from '@/lib/debt'
 import type {
@@ -81,6 +81,24 @@ const EXPENSE_SQL = `
    order by e.id, s.member_id
 `
 
+/**
+ * บิลของแท็กเดียว — เงื่อนไขเดียวกับ `EXPENSE_SQL` บวก `event_tag`
+ *
+ * `event_tag = $2` ไม่แมตช์แถวที่เป็น `null` ซึ่งถูกแล้ว: บิลที่ไม่ได้ติดแท็ก
+ * ไม่ได้อยู่ในทริปไหน
+ */
+const EXPENSE_BY_TAG_SQL = `
+  select e.id as expense_id,
+         e.payer_member_id,
+         e.status,
+         s.member_id,
+         s.amount_satang
+    from expense e
+    left join expense_share s on s.expense_id = e.id
+   where e.group_id = $1 and e.event_tag = $2
+   order by e.id, s.member_id
+`
+
 const SETTLEMENT_SQL = `
   select from_member_id, to_member_id, amount_satang, status
     from settlement
@@ -103,6 +121,25 @@ const MEMBERSHIP_SQL = `
      and g.status = 'active'
    order by m.group_id
 `
+
+/**
+ * บิลที่ติดแท็กหนึ่งอัน — **คืนบิลอย่างเดียว ไม่มี settlement มาด้วยโดยตั้งใจ** (D60)
+ *
+ * `settlement` ไม่มี `event_tag` และไม่ชี้ `expense` (D33) เงินที่จ่ายคืนกันแล้วจึง
+ * ไม่มีทางรู้ว่าเป็นของทริปไหน · คืนเป็น `Ledger` ที่มี `settlements: []` จะดูเหมือน
+ * "ยังไม่มีใครจ่ายคืน" ซึ่งเป็นคำโกหก — ชนิดที่คืนจึงเป็นบิลล้วน แล้วให้ผู้เรียกเป็น
+ * คนตัดสินว่าจะเรียกผลลัพธ์ว่าอะไร
+ *
+ * **คำสั่งเดียวจึงไม่ต้องมี transaction ครอบ** — ต่างจาก `loadLedger` ข้างล่างที่
+ * อ่านสองตารางแล้วต้องเห็น snapshot เดียวกัน
+ */
+export async function loadExpensesByTag(
+  groupId: string,
+  eventTag: string,
+): Promise<ExpenseForDebt[]> {
+  const result = await getPool().query<ExpenseShareRow>(EXPENSE_BY_TAG_SQL, [groupId, eventTag])
+  return toExpensesForDebt(result.rows)
+}
 
 /**
  * โหลด ledger ของวงหนึ่ง

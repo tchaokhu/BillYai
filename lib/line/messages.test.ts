@@ -129,3 +129,51 @@ describe('renderReply — บิลที่กดแล้วเปิดไม
     expect(text).not.toContain('วงอื่น')
   })
 })
+
+/**
+ * คำสั่งที่บอกให้เขาพิมพ์ ต้องพิมพ์ได้จริงในที่ที่เขาอ่านอยู่
+ *
+ * ในกลุ่มคีย์เวิร์ดเปล่าๆ ตกเป็นความเงียบตาม D47 — บอกให้พิมพ์ `บิล` เฉยๆ จึงส่งคน
+ * ไปเจอความเงียบ ซึ่งอ่านออกได้อย่างเดียวว่าบอทพัง
+ */
+describe('renderReply — คำสั่งที่แนะนำต้องพิมพ์ได้จริงตาม surface', () => {
+  it('`no-bills-for-tag` ในกลุ่มใส่ `@บิลใหญ่` ให้', () => {
+    const [message] = renderReply({ kind: 'no-bills-for-tag', tag: 'ปีใหม่' }, 'group')
+    expect(message?.text).toContain('#ปีใหม่')
+    expect(message?.text).toContain('@บิลใหญ่ บิล')
+  })
+
+  it('ใน 1:1 ไม่มี `@บิลใหญ่` — LINE ไม่มี mention ที่นั่น', () => {
+    const [message] = renderReply({ kind: 'no-bills-for-tag', tag: 'ปีใหม่' }, 'direct')
+    expect(message?.text).toContain('พิมพ์ บิล')
+    expect(message?.text).not.toContain('@บิลใหญ่')
+  })
+
+  it('`bill-not-found` ใช้กฎเดียวกัน', () => {
+    expect(renderReply({ kind: 'bill-not-found' }, 'group')[0]?.text).toContain('@บิลใหญ่ บิล')
+    expect(renderReply({ kind: 'bill-not-found' }, 'direct')[0]?.text).not.toContain('@บิลใหญ่')
+  })
+
+  /**
+   * `parseCommand` รับ `#` ตามด้วยอะไรก็ได้ยาวเท่าไหร่ก็ได้ และ `event_tag` เป็น
+   * `text` ไม่มีเพดาน · แท็กยาวๆ ดันข้อความทะลุ 5000 ตัวอักษรแล้ว LINE ปฏิเสธทั้ง
+   * reply — คนถามจะไม่ได้คำตอบอะไรเลย ซึ่งแย่กว่าเห็นชื่อแท็กถูกตัด
+   */
+  it('แท็กยาวถูกตัด ไม่ปล่อยให้ข้อความทะลุเพดานของ LINE', () => {
+    const absurd = 'ก'.repeat(6000)
+    for (const plan of [
+      { kind: 'no-bills-for-tag' as const, tag: absurd },
+      { kind: 'settled-for-tag' as const, tag: absurd },
+    ]) {
+      const [message] = renderReply(plan, 'group')
+      expect(message?.text.length).toBeLessThanOrEqual(5000)
+      expect(message?.text).toContain('…')
+    }
+  })
+
+  it('`settled-for-tag` พูดถึงแท็ก และไม่พูดว่าค้าง', () => {
+    const [message] = renderReply({ kind: 'settled-for-tag', tag: 'เชียงใหม่' }, 'group')
+    expect(message?.text).toContain('#เชียงใหม่')
+    expect(message?.text).not.toContain('ค้าง')
+  })
+})

@@ -15,7 +15,7 @@ import type { BillDetailInput, BillListInput } from '@/lib/flow/bills'
 import type { GroupView } from '@/lib/line/webhook'
 import { findActiveGroupByLineGroupId, findPersonalGroupByOwner } from './groups'
 import { countExpenses, findExpenseById, listExpenses } from './expenses'
-import { loadLedger } from './ledger'
+import { loadExpensesByTag, loadLedger } from './ledger'
 import { findMemberByLineUserId, listMembers } from './members'
 import { findAppUserByLineUserId } from './users'
 import type { LedgerGroup } from '@/lib/db/rows'
@@ -72,15 +72,37 @@ export async function loadGroupView(
  * แยก `'no-bills'` ออกจาก "ไม่มีใครติดใคร" เพราะสองอย่างนี้ตอบคนละแบบ: วงที่ยังไม่
  * เคยจดบิลตอบไกด์ (`DESIGN.md` §3) ส่วนวงที่เคลียร์กันหมดแล้วต้องบอกตรงๆ
  */
+/**
+ * @param eventTag `ยอด #เชียงใหม่` — **สรุปของบิลที่ติดแท็กนั้น ไม่ใช่ยอดค้าง** (D60)
+ *
+ *   `settlement` ไม่มี `event_tag` และไม่ชี้ `expense` (D33 ตั้งใจไว้อย่างนั้น) เงินที่
+ *   จ่ายคืนกันแล้วจึงหักออกจากยอดของทริปไม่ได้เลย · การ์ดเป็นคนบอกเรื่องนี้ด้วยคำที่
+ *   ใช้ ไม่ใช่ด้วยบรรทัดเตือนท้ายการ์ดยอดค้างใบเดิม (`lib/line/flex.ts`)
+ *
+ *   `'no-bills-for-tag'` แยกจาก `'no-bills'` เพราะสองอย่างนี้ตอบคนละแบบ: วงที่ยัง
+ *   ไม่เคยจดบิลต้องการวิธีใช้ ส่วนคนที่เพิ่งพิมพ์ชื่อแท็กมาเองต้องการรู้ว่าแท็กนั้น
+ *   ไม่มีบิล — ตอบไกด์ใส่เขาคือตอบผิดคำถาม
+ */
 export async function loadBalance(
   lineGroupId: string | null,
   lineUserId: string,
-): Promise<BalanceView | 'no-bills'> {
+  eventTag?: string,
+): Promise<BalanceView | 'no-bills' | 'no-bills-for-tag'> {
   const group = await resolveGroup(lineGroupId, lineUserId)
   if (group === null) return 'no-bills'
 
-  const ledger = await loadLedger(group.id)
-  if (ledger.expenses.length === 0) return 'no-bills'
+  /**
+   * **`[]` แทน settlement โดยตั้งใจ ไม่ใช่เพราะยังไม่ได้ทำ** — เงินที่จ่ายคืนกันแล้ว
+   * ไม่มีแท็กติดมา หักออกจากทริปไหนก็ผิดทั้งนั้น · ผลที่ได้จึงเป็นยอดของบิล ซึ่งเป็น
+   * คนละเรื่องกับยอดค้าง และการ์ดต้องพูดให้ตรงกับสิ่งนั้น
+   */
+  const ledger =
+    eventTag === undefined
+      ? await loadLedger(group.id)
+      : { expenses: await loadExpensesByTag(group.id, eventTag), settlements: [] }
+  if (ledger.expenses.length === 0) {
+    return eventTag === undefined ? 'no-bills' : 'no-bills-for-tag'
+  }
 
   /**
    * **`includeLeft: true`** — คนที่ออกจากกลุ่มไปแล้วต้องยังมีชื่ออยู่ในยอด

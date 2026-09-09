@@ -399,13 +399,13 @@ describe('balanceCardMessage — การ์ด `ยอด` (D31)', () => {
   ]
 
   it('หัวบล็อกบอกยอดรวมที่เจ้าหนี้ได้คืน', () => {
-    const texts = allText(balanceCardMessage(BLOCKS))
+    const texts = allText(balanceCardMessage(BLOCKS, 'group'))
     expect(texts).toContain('กอล์ฟ ได้คืน')
     expect(texts).toContain('฿900')
   })
 
   it('ยอดรวมทั้งวงอยู่หัวการ์ดและใน altText', () => {
-    const [message] = balanceCardMessage(BLOCKS)
+    const [message] = balanceCardMessage(BLOCKS, 'group')
     if (message?.type !== 'flex') throw new Error('วงเล็กต้องได้ Flex')
     expect(allText(message.contents)).toContain('฿1,100')
     expect(message.altText).toContain('฿1,100')
@@ -413,18 +413,18 @@ describe('balanceCardMessage — การ์ด `ยอด` (D31)', () => {
   })
 
   it('ลูกหนี้ทุกคนโผล่ครบ', () => {
-    const texts = allText(balanceCardMessage(BLOCKS)).join('|')
+    const texts = allText(balanceCardMessage(BLOCKS, 'group')).join('|')
     expect(texts).toContain('ตูน')
     expect(texts).toContain('เบียร์')
     expect(texts).toContain('แนน')
   })
 
   it('**ไม่มีปุ่ม** — การ์ดนี้อ่านอย่างเดียว', () => {
-    expect(findPostbackData(balanceCardMessage(BLOCKS))).toBeNull()
+    expect(findPostbackData(balanceCardMessage(BLOCKS, 'group'))).toBeNull()
   })
 
   it('วงเล็กได้ Flex ก้อนเดียว', () => {
-    expect(balanceCardMessage(BLOCKS)).toHaveLength(1)
+    expect(balanceCardMessage(BLOCKS, 'group')).toHaveLength(1)
   })
 
   it('วงแปดคนที่ทุกคนเคยจ่าย (28 คู่) ยังเป็น Flex และไม่ชนเพดาน 10 KB', () => {
@@ -437,7 +437,7 @@ describe('balanceCardMessage — การ์ด `ยอด` (D31)', () => {
         amountSatang: 10000,
       })),
     }))
-    const messages = balanceCardMessage(realistic)
+    const messages = balanceCardMessage(realistic, 'group')
     expect(messages).toHaveLength(1)
     expect(messages[0]?.type).toBe('flex')
 
@@ -462,7 +462,7 @@ describe('balanceCardMessage — การ์ด `ยอด` (D31)', () => {
         amountSatang: 10000,
       })),
     }))
-    const messages = balanceCardMessage(huge)
+    const messages = balanceCardMessage(huge, 'group')
     expect(messages.every((m) => m.type === 'text')).toBe(true)
     // reply ส่งได้ 5 ก้อน ก้อนละ 5000 ตัวอักษร
     expect(messages.length).toBeLessThanOrEqual(5)
@@ -573,7 +573,7 @@ describe('balanceCardMessage — วงที่ใหญ่เกินหน�
         amountSatang: 1250,
       })),
     }))
-    const messages = balanceCardMessage(blocks)
+    const messages = balanceCardMessage(blocks, 'group')
     expect(messages).toHaveLength(1)
     expect(messages[0]?.type).toBe('flex')
     expect((messages[0] as { contents: { type: string } }).contents.type).toBe('carousel')
@@ -591,7 +591,7 @@ describe('balanceCardMessage — วงที่ใหญ่เกินหน�
         amountSatang: 1250,
       })),
     }))
-    const bubbles = bubblesOf(balanceCardMessage(blocks)[0])
+    const bubbles = bubblesOf(balanceCardMessage(blocks, 'group')[0])
     expect(bubbles.length).toBeGreaterThan(1)
     for (const bubble of bubbles) {
       const texts = allText(bubble).join(LF)
@@ -944,6 +944,171 @@ describe('draftCardMessage — ใหญ่เกิน carousel ก็ยัง
         if (message.type === 'text') expect(message.text.length).toBeLessThanOrEqual(5000)
       }
       expect(findPostbackData(messages)).toBe(`confirm=${DRAFT_ID}`)
+    }
+  })
+})
+
+/**
+ * การ์ด `ยอด #เชียงใหม่` — **สรุปทริป ไม่ใช่ยอดค้าง** (D60)
+ *
+ * `settlement` ไม่มี `event_tag` และไม่ชี้ `expense` (D33 ตั้งใจ) การกรองตามแท็ก
+ * จึงหักเงินที่จ่ายคืนกันแล้วไม่ได้ · D34 ปฏิเสธ "ตอบยอดพร้อม disclaimer" ไว้แล้ว
+ * เพราะคนที่กวาดตาผ่านจำแค่ตัวเลข — **คำบนการ์ดจึงต้องต่างกันเอง** ไม่ใช่พึ่ง
+ * บรรทัดเตือนอย่างเดียว
+ */
+describe('balanceCardMessage — การ์ดสรุปตามแท็ก (D60)', () => {
+  const BLOCKS = [
+    {
+      creditorName: 'กอล์ฟ',
+      totalSatang: 90000,
+      rows: [
+        { debtorName: 'ตูน', amountSatang: 60000 },
+        { debtorName: 'เบียร์', amountSatang: 30000 },
+      ],
+    },
+  ]
+
+  it('หัวการ์ดเป็นชื่อแท็ก ไม่ใช่ `ยอดค้าง`', () => {
+    const texts = allText(balanceCardMessage(BLOCKS, 'group', 'เชียงใหม่'))
+    expect(texts).toContain('สรุป #เชียงใหม่')
+    expect(texts).not.toContain('ยอดค้าง')
+  })
+
+  /**
+   * **ห้ามมีคำว่า "ค้าง" อยู่บนการ์ดนี้เลย** — มันคือคำที่บอกว่าเงินยังไม่ถูกจ่าย
+   * ซึ่งการ์ดนี้ตอบไม่ได้ · D33 เขียนไว้ว่าประโยคแบบนั้นไม่มีอยู่ในระบบ
+   */
+  it('ไม่มีคำว่า "ค้าง" ที่ไหนเลยบนการ์ด', () => {
+    const json = JSON.stringify(balanceCardMessage(BLOCKS, 'group', 'เชียงใหม่'))
+    expect(json).not.toContain('ค้าง')
+  })
+
+  it('หัวบล็อกใช้คำที่ไม่ได้แปลว่ายังไม่ได้จ่าย', () => {
+    const texts = allText(balanceCardMessage(BLOCKS, 'group', 'เชียงใหม่'))
+    expect(texts).toContain('กอล์ฟ ออกไปก่อน')
+    expect(texts).not.toContain('กอล์ฟ ได้คืน')
+  })
+
+  it('บอกตรงๆ ว่าไม่ได้หักเงินที่จ่ายคืนกันแล้ว และชี้ทางไปยอดจริง', () => {
+    const texts = allText(balanceCardMessage(BLOCKS, 'group', 'เชียงใหม่')).join(LF)
+    expect(texts).toContain('ไม่ได้หักเงินที่จ่ายคืน')
+    expect(texts).toContain('ยอด')
+  })
+
+  it('altText บอกว่าเป็นสรุปของแท็กไหน', () => {
+    const [message] = balanceCardMessage(BLOCKS, 'group', 'เชียงใหม่')
+    if (message?.type !== 'flex') throw new Error('วงเล็กต้องได้ Flex')
+    expect(message.altText).toContain('#เชียงใหม่')
+    expect(message.altText.length).toBeLessThanOrEqual(400)
+  })
+
+  it('ไม่ส่งแท็กมา = การ์ด `ยอด` เดิมทุกอย่าง', () => {
+    expect(balanceCardMessage(BLOCKS, 'group')).toEqual(balanceCardMessage(BLOCKS, 'group', null))
+    expect(allText(balanceCardMessage(BLOCKS, 'group'))).toContain('ยอดค้าง')
+  })
+
+  /**
+   * คนเลื่อนไปใบที่สามต้องยังรู้ว่ากำลังอ่านสรุปของทริป ไม่ใช่ยอดค้าง — หัวการ์ด
+   * กับบรรทัดเตือนซ้ำทุกใบด้วยเกณฑ์เดียวกับที่ D52 ให้หัวการ์ดซ้ำ
+   */
+  it('carousel ซ้ำทั้งหัวและบรรทัดเตือนทุกใบ', () => {
+    // 15 บล็อก — ขนาดเดียวกับเทสต์ carousel ของ `ยอด` ซึ่งยังอยู่ใต้เพดาน
+    const many = Array.from({ length: 15 }, (_, i) => ({
+      creditorName: `เจ้าหนี้คนที่ ${i}`,
+      totalSatang: 5000,
+      rows: Array.from({ length: 8 }, (_, j) => ({
+        debtorName: `ลูกหนี้คนที่ ${i}-${j}`,
+        amountSatang: 625,
+      })),
+    }))
+    const [message] = balanceCardMessage(many, 'group', 'เชียงใหม่')
+    if (message?.type !== 'flex') throw new Error('ยังต้องเป็น carousel ไม่ใช่ข้อความ')
+    const bubbles = bubblesOf(message)
+    expect(bubbles.length).toBeGreaterThan(1)
+    for (const bubble of bubbles) {
+      const texts = allText(bubble).join(LF)
+      expect(texts).toContain('สรุป #เชียงใหม่')
+      expect(texts).toContain('ไม่ได้หักเงินที่จ่ายคืน')
+    }
+  })
+
+  it('ทางลงเป็นข้อความก็ยังไม่พูดว่าค้าง', () => {
+    const huge = Array.from({ length: 900 }, (_, i) => ({
+      creditorName: `เจ้าหนี้คนที่ ${i}`,
+      totalSatang: 5000,
+      rows: Array.from({ length: 6 }, (_, j) => ({
+        debtorName: `ลูกหนี้คนที่ ${i}-${j}`,
+        amountSatang: 833,
+      })),
+    }))
+    const messages = balanceCardMessage(huge, 'group', 'เชียงใหม่')
+    for (const message of messages) expect(message.type).toBe('text')
+    const texts = allText(messages).join(LF)
+    expect(texts).toContain('สรุป #เชียงใหม่')
+    expect(texts).toContain('ไม่ได้หักเงินที่จ่ายคืน')
+    expect(texts).not.toContain('ค้าง')
+  })
+})
+
+/**
+ * บรรทัดเตือนชี้ทางไปยอดจริง — **ต้องชี้ให้ถูกที่ที่คนอ่านอยู่**
+ *
+ * ในกลุ่ม `ยอด` เปล่าๆ ตกเป็นความเงียบตาม D47 · บอกให้พิมพ์ `ยอด` เฉยๆ แปลว่าเขา
+ * จะพิมพ์แล้วไม่มีอะไรเกิดขึ้น ซึ่งอ่านออกได้อย่างเดียวว่าบอทพัง · เกณฑ์เดียวกับที่
+ * `buildGuide` ใส่ `@บิลใหญ่` ให้ตามที่ที่ข้อความไปโผล่
+ */
+describe('balanceCardMessage — บรรทัดเตือนชี้ทางตามที่ที่คนอ่านอยู่', () => {
+  const BLOCKS = [
+    { creditorName: 'กอล์ฟ', totalSatang: 90000, rows: [{ debtorName: 'ตูน', amountSatang: 90000 }] },
+  ]
+
+  it('ในกลุ่มต้องบอกให้เรียกบอทด้วย', () => {
+    const texts = allText(balanceCardMessage(BLOCKS, 'group', 'เชียงใหม่')).join(LF)
+    expect(texts).toContain('@บิลใหญ่ ยอด')
+  })
+
+  it('ใน 1:1 ไม่มี `@บิลใหญ่` — LINE ไม่มี mention ที่นั่น', () => {
+    const texts = allText(balanceCardMessage(BLOCKS, 'direct', 'เชียงใหม่')).join(LF)
+    expect(texts).toContain('พิมพ์ ยอด')
+    expect(texts).not.toContain('@บิลใหญ่')
+  })
+
+  /**
+   * `push` ขึ้นก้อนใหม่แล้วเริ่มจากบรรทัดนั้นเลย — ก้อนที่สองถึงห้าจึงเป็นรายชื่อ
+   * ลอยๆ ที่ไม่บอกว่าเป็นสรุปของทริปหรือยอดค้าง ซึ่งเป็นความต่างทั้งหมดของการ์ดนี้
+   */
+  it('ทางลงเป็นข้อความ — ทุกก้อนบอกว่ากำลังอ่านอะไรอยู่', () => {
+    const huge = Array.from({ length: 900 }, (_, i) => ({
+      creditorName: `เจ้าหนี้คนที่ ${i}`,
+      totalSatang: 5000,
+      rows: Array.from({ length: 6 }, (_, j) => ({
+        debtorName: `ลูกหนี้คนที่ ${i}-${j}`,
+        amountSatang: 833,
+      })),
+    }))
+    const messages = balanceCardMessage(huge, 'group', 'เชียงใหม่')
+    expect(messages.length).toBeGreaterThan(1)
+    for (const message of messages) {
+      if (message.type !== 'text') throw new Error('ต้องเป็นข้อความ')
+      expect(message.text).toContain('สรุป #เชียงใหม่')
+      expect(message.text.length).toBeLessThanOrEqual(5000)
+    }
+  })
+
+  it('ยอดค้างทั้งวงที่ตกเป็นข้อความก็บอกทุกก้อนเหมือนกัน', () => {
+    const huge = Array.from({ length: 900 }, (_, i) => ({
+      creditorName: `เจ้าหนี้คนที่ ${i}`,
+      totalSatang: 5000,
+      rows: Array.from({ length: 6 }, (_, j) => ({
+        debtorName: `ลูกหนี้คนที่ ${i}-${j}`,
+        amountSatang: 833,
+      })),
+    }))
+    const messages = balanceCardMessage(huge, 'group')
+    expect(messages.length).toBeGreaterThan(1)
+    for (const message of messages) {
+      if (message.type !== 'text') throw new Error('ต้องเป็นข้อความ')
+      expect(message.text).toContain('ยอดค้างทั้งวง')
     }
   })
 })
