@@ -107,7 +107,9 @@ export interface LineWebhookDeps {
   loadBalance: (
     lineGroupId: string | null,
     lineUserId: string,
-  ) => Promise<BalanceView | 'no-bills'>
+    /** `ยอด #เชียงใหม่` — สรุปของบิลที่ติดแท็กนั้น ไม่ใช่ยอดค้าง (D60) */
+    eventTag?: string,
+  ) => Promise<BalanceView | 'no-bills' | 'no-bills-for-tag'>
   /**
    * รายการบิลล่าสุดของวง (D45) · `'no-bills'` = ยังไม่เคยจดสักใบ ตอบไกด์ด้วย
    * เกณฑ์เดียวกับ `loadBalance`
@@ -210,12 +212,40 @@ async function messagesFor(event: LineEvent, deps: LineWebhookDeps): Promise<Lin
     // ยิง query ด้วย id ว่างจะได้ `no-bills` ซึ่งพาไปตอบไกด์แทนที่จะบอกสาเหตุจริง
     if (event.source.lineUserId === null) return renderReply({ kind: 'unknown-sender' }, surface)
     const lineGroupId = event.source.kind === 'group' ? event.source.lineGroupId : null
-    const view = await deps.loadBalance(lineGroupId, event.source.lineUserId)
+    /**
+     * **ไม่ส่งคีย์เมื่อไม่มีแท็ก** — `loadBalance` แยกสองเส้นด้วยค่า `undefined`
+     * และ `exactOptionalPropertyTypes` เปิดอยู่
+     */
+    const view =
+      plan.eventTag === undefined
+        ? await deps.loadBalance(lineGroupId, event.source.lineUserId)
+        : await deps.loadBalance(lineGroupId, event.source.lineUserId, plan.eventTag)
     // วงที่ยังไม่เคยจดบิลตอบไกด์ ไม่ใช่ตอบว่ายอดเป็นศูนย์ — คนที่ยังไม่เคยใช้
     // ต้องการวิธีใช้ ไม่ใช่ตัวเลข
     if (view === 'no-bills') return renderReply({ kind: 'guide' }, surface)
-    if (view.kind === 'settled') return renderReply({ kind: 'settled' }, surface)
-    return balanceCardMessage(view.blocks)
+    /**
+     * แท็กที่ไม่มีบิลไม่ใช่วงที่ไม่มีบิล — เขาใช้เป็นแล้วและพิมพ์ชื่อแท็กมาเอง
+     * ไกด์จึงเป็นคำตอบผิดคำถาม (D60)
+     */
+    if (view === 'no-bills-for-tag') {
+      /**
+       * คำตอบนี้เกิดได้เฉพาะตอนมีแท็ก — ถ้ามาโดยไม่มี แปลว่าฝั่ง repo ผิดสัญญา ·
+       * แปะ `#` เปล่าๆ ลงข้อความจะได้ประโยคที่อ่านไม่รู้เรื่อง ตกกลับไปตอบไกด์
+       * เหมือน `no-bills` ซึ่งเป็นคำตอบที่ยังใช้ได้กับคนอ่าน
+       */
+      return plan.eventTag === undefined
+        ? renderReply({ kind: 'guide' }, surface)
+        : renderReply({ kind: 'no-bills-for-tag', tag: plan.eventTag }, surface)
+    }
+    if (view.kind === 'settled') {
+      return renderReply(
+        plan.eventTag === undefined
+          ? { kind: 'settled' }
+          : { kind: 'settled-for-tag', tag: plan.eventTag },
+        surface,
+      )
+    }
+    return balanceCardMessage(view.blocks, surface, plan.eventTag ?? null)
   }
 
   if (plan.kind === 'bills') {

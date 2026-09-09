@@ -91,7 +91,7 @@ describe('loadBalance', () => {
     await recordBill(lineGroupId, lineUserId, 'เบียร์')
 
     const view = await loadBalance(lineGroupId, lineUserId)
-    if (view === 'no-bills' || view.kind !== 'debts') throw new Error('ต้องมีหนี้')
+    if (typeof view === 'string' || view.kind !== 'debts') throw new Error('ต้องมีหนี้')
     expect(view.blocks).toEqual([
       {
         creditorName: 'เบียร์',
@@ -115,7 +115,7 @@ describe('loadBalance', () => {
     ], { ...DRAFT, totalSatang: 30000, participants: [{ name: 'เบียร์', weight: 1 }] })
 
     const view = await loadBalance(lineGroupId, first)
-    if (view === 'no-bills' || view.kind !== 'debts') throw new Error('ต้องมีหนี้')
+    if (typeof view === 'string' || view.kind !== 'debts') throw new Error('ต้องมีหนี้')
     expect(view.blocks.map((b) => b.creditorName)).toEqual(['เบียร์', 'แนน'])
   })
 
@@ -124,7 +124,7 @@ describe('loadBalance', () => {
     await recordBill(null, lineUserId, 'ฉัน')
 
     const view = await loadBalance(null, lineUserId)
-    if (view === 'no-bills' || view.kind !== 'debts') throw new Error('ต้องมีหนี้')
+    if (typeof view === 'string' || view.kind !== 'debts') throw new Error('ต้องมีหนี้')
     expect(view.blocks[0]?.creditorName).toBe('ฉัน')
   })
 
@@ -200,7 +200,7 @@ describe('loadBalance — คนที่ออกจากกลุ่มไป
     await markMemberLeft(golf.id)
 
     const view = await loadBalance(lineGroupId, lineUserId)
-    if (view === 'no-bills' || view.kind !== 'debts') throw new Error('ต้องมีหนี้')
+    if (typeof view === 'string' || view.kind !== 'debts') throw new Error('ต้องมีหนี้')
     expect(view.blocks[0]?.rows.map((r) => r.debtorName).sort()).toEqual(['กอล์ฟ', 'ตูน'])
     expect(view.blocks[0]?.totalSatang).toBe(120000)
   })
@@ -456,5 +456,107 @@ describe('loadBillList / loadBillDetail — ที่ code review จับไ�
     expect(first.totalSatang).toBe(
       detail.lines.reduce((sum, line) => sum + line.amountSatang, 0),
     )
+  })
+})
+
+/**
+ * `ยอด #เชียงใหม่` — **สรุปของบิลที่ติดแท็ก ไม่ใช่ยอดค้าง** (D60)
+ *
+ * `settlement` ไม่มี `event_tag` และไม่ชี้ `expense` (D33 ตั้งใจ) — เงินที่จ่ายคืน
+ * กันแล้วจึงไม่มีทางรู้ว่าเป็นของทริปไหน · เส้นนี้จึงคิดจากบิลอย่างเดียว และคำบน
+ * การ์ดเป็นตัวบอกเรื่องนั้น (`lib/line/flex.ts`)
+ */
+describe('loadBalance — กรองตามแท็ก (D60)', () => {
+  /**
+   * บิลติดแท็กหนึ่งใบ (เบียร์ออก ฿1,200) กับบิลที่ไม่ติดแท็กหนึ่งใบ (แนนออก ฿600)
+   * — คนจ่ายคนละคนเพราะ `payer: new` ตั้งชื่อให้คนพิมพ์ ซึ่งทำได้ครั้งเดียวต่อคน
+   */
+  async function twoBills(): Promise<{ lineGroupId: string; lineUserId: string }> {
+    const lineGroupId = fakeLineGroupId()
+    const lineUserId = fakeLineUserId()
+    await recordBill(lineGroupId, lineUserId, 'เบียร์', undefined, {
+      ...DRAFT,
+      eventTag: 'เชียงใหม่',
+    })
+    await recordBill(lineGroupId, fakeLineUserId(), 'แนน', [
+      { name: 'กอล์ฟ', amountSatang: 60000, isNew: false, isPayer: false },
+    ], {
+      ...DRAFT,
+      description: 'ข้าวเช้า',
+      totalSatang: 60000,
+      participants: [{ name: 'กอล์ฟ', weight: 1 }],
+    })
+    return { lineGroupId, lineUserId }
+  }
+
+  it('นับเฉพาะบิลที่ติดแท็กนั้น', async () => {
+    const { lineGroupId, lineUserId } = await twoBills()
+
+    const view = await loadBalance(lineGroupId, lineUserId, 'เชียงใหม่')
+    if (typeof view === 'string' || view.kind !== 'debts') throw new Error('ต้องมีตัวเลข')
+    expect(view.blocks).toEqual([
+      {
+        creditorName: 'เบียร์',
+        totalSatang: 120000,
+        rows: [
+          { debtorName: 'กอล์ฟ', amountSatang: 60000 },
+          { debtorName: 'ตูน', amountSatang: 60000 },
+        ],
+      },
+    ])
+  })
+
+  it('ไม่ส่งแท็กมา = ยอดทั้งวงตามเดิม รวมบิลที่ไม่ได้ติดแท็ก', async () => {
+    const { lineGroupId, lineUserId } = await twoBills()
+
+    const view = await loadBalance(lineGroupId, lineUserId)
+    if (typeof view === 'string' || view.kind !== 'debts') throw new Error('ต้องมีหนี้')
+    expect(view.blocks.map((b) => b.creditorName).sort()).toEqual(['เบียร์', 'แนน'])
+  })
+
+  /**
+   * ตอบ `no-bills` แล้วชั้นบนจะตอบไกด์ ซึ่งเป็นคำตอบของวงที่ยังไม่เคยใช้ — ผิดคำถาม
+   * ของคนที่เพิ่งพิมพ์ชื่อแท็กมาเอง
+   */
+  it('แท็กที่ไม่มีบิลเลย ต่างจากวงที่ยังไม่เคยจดบิล', async () => {
+    const { lineGroupId, lineUserId } = await twoBills()
+
+    expect(await loadBalance(lineGroupId, lineUserId, 'ปีใหม่')).toBe('no-bills-for-tag')
+    expect(await loadBalance(fakeLineGroupId(), fakeLineUserId(), 'ปีใหม่')).toBe('no-bills')
+  })
+
+  it('เทียบชื่อแท็กตรงตัว ไม่ใช่บางส่วน', async () => {
+    const { lineGroupId, lineUserId } = await twoBills()
+
+    expect(await loadBalance(lineGroupId, lineUserId, 'เชียง')).toBe('no-bills-for-tag')
+  })
+
+  /**
+   * บิลที่ยกเลิกแล้วยังอยู่ในตาราง (D18 ไม่ลบอะไร) — `computeDebts` ข้ามให้เอง ·
+   * แท็กที่เหลือแต่บิลที่ถูกยกเลิกจึงเป็น "หารกันลงตัว" ไม่ใช่ "ไม่มีบิล"
+   */
+  it('บิลที่ถูกยกเลิกไม่ถูกนับ แต่แท็กยังมีอยู่', async () => {
+    const lineGroupId = fakeLineGroupId()
+    const lineUserId = fakeLineUserId()
+    await recordBill(lineGroupId, lineUserId, 'เบียร์', undefined, {
+      ...DRAFT,
+      eventTag: 'เชียงใหม่',
+    })
+    const list = await loadBillList(lineGroupId, lineUserId)
+    if (list === 'no-bills') throw new Error('ต้องมีบิลก่อนยกเลิก')
+    const first = list.bills[0]
+    if (first === undefined) throw new Error('ต้องมีบิลก่อนยกเลิก')
+    await voidExpense(first.id)
+
+    expect(await loadBalance(lineGroupId, lineUserId, 'เชียงใหม่')).toEqual({ kind: 'settled' })
+  })
+
+  it('แชท 1:1 กรองได้เหมือนกัน', async () => {
+    const lineUserId = fakeLineUserId()
+    await recordBill(null, lineUserId, 'ฉัน', undefined, { ...DRAFT, eventTag: 'เชียงใหม่' })
+
+    const view = await loadBalance(null, lineUserId, 'เชียงใหม่')
+    if (typeof view === 'string' || view.kind !== 'debts') throw new Error('ต้องมีตัวเลข')
+    expect(view.blocks[0]?.creditorName).toBe('ฉัน')
   })
 })

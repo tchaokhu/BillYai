@@ -14,6 +14,7 @@
 
 import { formatSatang } from '../money'
 import type { BalanceBlock } from '../flow/balance'
+import type { Surface } from '../flow/dispatch'
 import type { LineMessage, LineTextMessage } from './messages'
 import type { DraftCard } from '../flow/draft'
 import type { BillRow } from '../flow/bills'
@@ -93,7 +94,11 @@ export type QuickReplyItem = {
  * (D33) เป็นของ Phase 2 พร้อม Passive Nag
  */
 /** บล็อกของเจ้าหนี้หนึ่งคน — หัวบล็อกกับแถวลูกหนี้ · ใช้ทั้งใน bubble เดี่ยวและ carousel */
-function creditorBlock(block: BalanceBlock): FlexBox {
+/**
+ * @param verb คำที่ต่อท้ายชื่อเจ้าหนี้ — `ได้คืน` สำหรับยอดค้างจริง ส่วนการ์ดสรุป
+ *   ตามแท็กใช้ `ออกไปก่อน` เพราะมันตอบไม่ได้ว่าเงินถูกจ่ายคืนไปแล้วหรือยัง (D60)
+ */
+function creditorBlock(block: BalanceBlock, verb: string): FlexBox {
   return {
     type: 'box',
     layout: 'vertical',
@@ -106,7 +111,7 @@ function creditorBlock(block: BalanceBlock): FlexBox {
         contents: [
           {
             type: 'text',
-            text: `${shorten(block.creditorName, MAX_NAME)} ได้คืน`,
+            text: `${shorten(block.creditorName, MAX_NAME)} ${verb}`,
             size: 'sm',
             weight: 'bold',
             wrap: true,
@@ -127,28 +132,85 @@ function creditorBlock(block: BalanceBlock): FlexBox {
   }
 }
 
-function balanceBubble(blocks: readonly BalanceBlock[]): LineFlexMessage {
-  const total = blocks.reduce((sum, block) => sum + block.totalSatang, 0)
+/**
+ * คำบนการ์ด `ยอด` — **ต่างกันทั้งชุดเมื่อกรองตามแท็ก ไม่ใช่เติม disclaimer**
+ *
+ * D34 ปฏิเสธ "ตอบยอดพร้อมคำเตือน" ไว้แล้วเพราะการ์ดจะมีสองความหมายในใบเดียว
+ * และคนที่กวาดตาผ่านจำแค่ตัวเลข · การ์ดสรุปตามแท็กจึงเปลี่ยนหัว เปลี่ยนคำกริยา
+ * ของหัวบล็อก และ**ไม่มีคำว่า "ค้าง" อยู่บนใบนั้นเลย** — บรรทัดเตือนเป็นของแถม
+ * ไม่ใช่สิ่งเดียวที่กันความเข้าใจผิด
+ */
+interface BalanceWording {
+  title: string
+  /**
+   * หัวของทางลงที่เป็นข้อความ — ยาวกว่าหัวการ์ดได้เพราะไม่ต้องแย่งที่กับยอดในบรรทัด
+   * เดียวกัน · `ยอดค้าง` บนการ์ดมียอดอยู่ข้างๆ ส่วนในข้อความมันคือคำแรกของก้อน
+   */
+  textTitle: string
+  verb: string
+  altText: (total: number, count: number) => string
+  /** `null` = ไม่มีบรรทัดเตือน (ยอดค้างจริงไม่ต้องอธิบายอะไร) */
+  note: string | null
+}
 
-  const contents: FlexComponent[] = [
+/**
+ * @param surface ในกลุ่ม `ยอด` เปล่าๆ ตกเป็นความเงียบตาม D47 — บรรทัดที่บอกให้พิมพ์
+ *   `ยอด` เฉยๆ จึงส่งคนไปเจอความเงียบ ซึ่งอ่านออกได้อย่างเดียวว่าบอทพัง ·
+ *   เกณฑ์เดียวกับที่ `buildGuide` ใส่ `@บิลใหญ่` ให้ตามที่ที่ข้อความไปโผล่
+ */
+function wordingOf(eventTag: string | null, surface: Surface): BalanceWording {
+  if (eventTag === null) {
+    return {
+      title: 'ยอดค้าง',
+      textTitle: 'ยอดค้างทั้งวง',
+      verb: 'ได้คืน',
+      altText: (total, count) => `ยอดค้างทั้งวง ${baht(total)} · ${count} คนรอรับคืน`,
+      note: null,
+    }
+  }
+  const tag = `#${shorten(eventTag, MAX_NAME)}`
+  return {
+    title: `สรุป ${tag}`,
+    textTitle: `สรุป ${tag}`,
+    verb: 'ออกไปก่อน',
+    altText: (total, count) => `สรุป ${tag} ${baht(total)} · ${count} คนออกเงินไปก่อน`,
+    note: `ยอดของบิลที่ติดแท็กนี้ ไม่ได้หักเงินที่จ่ายคืนกันแล้ว — ยอดจริงพิมพ์ ${
+      surface === 'group' ? '@บิลใหญ่ ยอด' : 'ยอด'
+    }`,
+  }
+}
+
+/** หัวการ์ดพร้อมบรรทัดเตือน — `paginate` ซ้ำก้อนนี้ทุกใบของ carousel */
+function balanceHeader(wording: BalanceWording, total: number): FlexComponent[] {
+  const header: FlexComponent[] = [
     {
       type: 'box',
       layout: 'horizontal',
       contents: [
-        { type: 'text', text: 'ยอดค้าง', size: 'lg', weight: 'bold', flex: 3 },
+        { type: 'text', text: wording.title, size: 'lg', weight: 'bold', flex: 3 },
         { type: 'text', text: baht(total), size: 'lg', weight: 'bold', align: 'end', flex: 2 },
       ],
     },
   ]
+  if (wording.note !== null) {
+    header.push({ type: 'text', text: wording.note, size: 'sm', color: '#8c8c8c', wrap: true })
+  }
+  return header
+}
+
+function balanceBubble(blocks: readonly BalanceBlock[], wording: BalanceWording): LineFlexMessage {
+  const total = blocks.reduce((sum, block) => sum + block.totalSatang, 0)
+
+  const contents: FlexComponent[] = balanceHeader(wording, total)
 
   for (const block of blocks) {
     contents.push({ type: 'separator', margin: 'md' })
-    contents.push(creditorBlock(block))
+    contents.push(creditorBlock(block, wording.verb))
   }
 
   return {
     type: 'flex',
-    altText: `ยอดค้างทั้งวง ${baht(total)} · ${blocks.length} คนรอรับคืน`,
+    altText: wording.altText(total, blocks.length),
     // การ์ดนี้อ่านอย่างเดียว ไม่มี footer
     contents: {
       type: 'bubble',
@@ -168,8 +230,22 @@ function balanceBubble(blocks: readonly BalanceBlock[]): LineFlexMessage {
  * ลดรูป ไม่ใช่ตัดเนื้อหา** · reply ส่งได้ 5 ก้อนต่อครั้ง ก้อนละ 5000 ตัวอักษร ซึ่ง
  * รับได้ราว 800 แถว มากกว่าวงจริงทุกขนาด
  */
-export function balanceCardMessage(blocks: readonly BalanceBlock[]): LineMessage[] {
-  const bubble = balanceBubble(blocks)
+/**
+ * @param eventTag `null` = ยอดค้างทั้งวงตามเดิม · มีค่า = **สรุปของบิลที่ติดแท็ก
+ *   นั้น ซึ่งไม่ใช่ยอดค้าง** (D60) — `settlement` ไม่มีแท็กให้หักออก คำบนการ์ด
+ *   จึงเปลี่ยนทั้งชุด ไม่ใช่เติมบรรทัดเตือนท้ายการ์ดยอดค้างใบเดิม
+ */
+export function balanceCardMessage(
+  blocks: readonly BalanceBlock[],
+  /**
+   * **บังคับส่ง ไม่มีค่าเริ่มต้น** — เกณฑ์เดียวกับ `renderReply`: ค่าเริ่มต้นทำให้
+   * จุดเรียกที่ลืมส่งกลายเป็นคำแนะนำที่ผิดที่แบบเงียบๆ
+   */
+  surface: Surface,
+  eventTag: string | null = null,
+): LineMessage[] {
+  const wording = wordingOf(eventTag, surface)
+  const bubble = balanceBubble(blocks, wording)
   if (Buffer.byteLength(JSON.stringify(bubble), 'utf8') <= MAX_BUBBLE_BYTES) return [bubble]
 
   /**
@@ -181,17 +257,8 @@ export function balanceCardMessage(blocks: readonly BalanceBlock[]): LineMessage
    */
   const total = blocks.reduce((sum, block) => sum + block.totalSatang, 0)
   const pages = paginate(
-    [
-      {
-        type: 'box',
-        layout: 'horizontal',
-        contents: [
-          { type: 'text', text: 'ยอดค้าง', size: 'lg', weight: 'bold', flex: 3 },
-          { type: 'text', text: baht(total), size: 'lg', weight: 'bold', align: 'end', flex: 2 },
-        ],
-      },
-    ],
-    blocks.map((block) => creditorBlock(block)),
+    balanceHeader(wording, total),
+    blocks.map((block) => creditorBlock(block, wording.verb)),
   )
   if (pages !== null) {
     const carousel: LineFlexMessage = {
@@ -205,13 +272,27 @@ export function balanceCardMessage(blocks: readonly BalanceBlock[]): LineMessage
   }
 
   const chunks: string[] = []
-  let current = `ยอดค้างทั้งวง ${baht(total)}`
+  /**
+   * หัวกับบรรทัดเตือนต้องรอดมาถึงข้อความด้วย — ทางลงนี้เปลี่ยนรูป ไม่ใช่เปลี่ยน
+   * ความหมาย · การ์ดสรุปตามแท็กที่กลายเป็นข้อความแล้วพูดว่า "ยอดค้าง" คือคำตอบ
+   * ที่ผิดคำถาม ซึ่ง D34 ปฏิเสธไว้ตั้งแต่ต้น
+   */
+  /**
+   * **หัวซ้ำทุกก้อน ไม่ใช่เฉพาะก้อนแรก** — เกณฑ์เดียวกับที่ D52 ให้หัวการ์ดซ้ำทุกใบ
+   * ของ carousel · ก้อนที่สองเป็นต้นไปที่ไม่มีหัวคือรายชื่อกับตัวเลขลอยๆ ที่ไม่บอก
+   * ว่าเป็นสรุปของทริปหรือยอดค้าง ซึ่งเป็นความต่างทั้งหมดของการ์ดสองใบนี้
+   */
+  const heading =
+    wording.note === null
+      ? `${wording.textTitle} ${baht(total)}`
+      : `${wording.textTitle} ${baht(total)}${LF}${wording.note}`
+  let current = heading
 
   const push = (line: string): void => {
     // +1 สำหรับตัวขึ้นบรรทัดที่จะต่อเข้าไป
     if (current.length + line.length + 1 > MAX_TEXT) {
       chunks.push(current)
-      current = line
+      current = heading + LF + line
     } else {
       current = current + LF + line
     }
@@ -219,7 +300,7 @@ export function balanceCardMessage(blocks: readonly BalanceBlock[]): LineMessage
 
   for (const block of blocks) {
     push('')
-    push(`${shorten(block.creditorName, MAX_NAME)} ได้คืน ${baht(block.totalSatang)}`)
+    push(`${shorten(block.creditorName, MAX_NAME)} ${wording.verb} ${baht(block.totalSatang)}`)
     for (const row of block.rows) {
       push(`  ${shorten(row.debtorName, MAX_NAME)} ${baht(row.amountSatang)}`)
     }
@@ -230,7 +311,11 @@ export function balanceCardMessage(blocks: readonly BalanceBlock[]): LineMessage
   // ไม่ใช่เงียบๆ ตัดทิ้ง ซึ่งใน ledger คือยอดหาย
   if (chunks.length > MAX_MESSAGES) {
     const kept = chunks.slice(0, MAX_MESSAGES - 1)
-    kept.push(`ยังมีต่ออีก ${chunks.length - kept.length} ส่วนที่ยาวเกินกว่าจะส่งในครั้งเดียว`)
+    // ก้อนบอกว่าตัดก็ยังต้องมีหัว — มันคือก้อนสุดท้ายที่คนอ่าน และหัวคือสิ่งที่บอกว่า
+    // กำลังอ่านสรุปของทริปอยู่ ไม่ใช่ยอดค้าง
+    kept.push(
+      `${heading}${LF}${LF}ยังมีต่ออีก ${chunks.length - kept.length} ส่วนที่ยาวเกินกว่าจะส่งในครั้งเดียว`,
+    )
     return kept.map((text) => ({ type: 'text', text }))
   }
   return chunks.map((text) => ({ type: 'text', text }))

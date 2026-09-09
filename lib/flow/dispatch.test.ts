@@ -84,16 +84,70 @@ describe('decideReply — ของที่ยังไม่มีต้อง
     })
   })
 
-  it('คำสั่งที่มี args ยังไม่เปิดใช้ ต่อให้ตัวคำสั่งจะเปิดแล้ว (D34)', () => {
-    // ไม่มีคำสั่งไหนรับ args ได้ในเฟสนี้ · ตอบยอดทั้งวงแทนยอดที่ขอกรอง
-    // คือการตอบผิดคำถามแบบเงียบ ซึ่งใน ledger เท่ากับยอดผิด
-    expect(decideReply({ surface: 'group', addressed: true }, { kind: 'command', command: 'balance', args: '#เชียงใหม่' })).toEqual(
+  it('คำสั่งอื่นที่มี args ยังไม่เปิดใช้ ต่อให้ตัวคำสั่งจะเปิดแล้ว (D34)', () => {
+    // `ยอด` เป็นคำสั่งเดียวที่รับ `#tag` ได้ (D60) · ที่เหลือตอบยอดทั้งวงแทนสิ่งที่
+    // ขอกรองไม่ได้ นั่นคือการตอบผิดคำถามแบบเงียบ ซึ่งใน ledger เท่ากับยอดผิด
+    expect(decideReply({ surface: 'group', addressed: true }, { kind: 'command', command: 'bills', args: '#เชียงใหม่' })).toEqual(
       { kind: 'not-available', what: 'command' },
     )
     expect(decideReply({ surface: 'group', addressed: true }, { kind: 'command', command: 'guide', args: '#x' })).toEqual({
       kind: 'not-available',
       what: 'command',
     })
+  })
+})
+
+/**
+ * `ยอด #เชียงใหม่` — **สรุปทริป ไม่ใช่ยอดค้าง** (D60)
+ *
+ * `settlement` ไม่มี `event_tag` และไม่ชี้ `expense` (D33 ตั้งใจ) การกรองตามแท็ก
+ * จึงหักเงินที่จ่ายคืนกันแล้วไม่ได้เลย · ชั้นนี้แค่แยกเจตนาออกมา ส่วนคำที่ใช้บน
+ * การ์ดเป็นเรื่องของ `lib/line/flex.ts`
+ */
+describe('decideReply — `ยอด #tag` (D60)', () => {
+  it('แท็กเดียวหลัง `ยอด` = ขอสรุปของแท็กนั้น', () => {
+    expect(
+      decideReply({ surface: 'group', addressed: true }, { kind: 'command', command: 'balance', args: '#เชียงใหม่' }),
+    ).toEqual({ kind: 'balance', eventTag: 'เชียงใหม่' })
+  })
+
+  it('ใน 1:1 ก็ได้เหมือนกัน — ไม่ต้องเรียกบอท', () => {
+    expect(
+      decideReply({ surface: 'direct', addressed: false }, { kind: 'command', command: 'balance', args: '#ทริป' }),
+    ).toEqual({ kind: 'balance', eventTag: 'ทริป' })
+  })
+
+  // `exactOptionalPropertyTypes` เปิดอยู่ — คีย์ที่ไม่มีต้องไม่โผล่มาเป็น undefined
+  it('`ยอด` เปล่าๆ ไม่มีคีย์ `eventTag` ติดมา', () => {
+    const plan = decideReply({ surface: 'direct', addressed: false }, balance)
+    expect(plan).toEqual({ kind: 'balance' })
+    expect('eventTag' in plan).toBe(false)
+  })
+
+  /**
+   * สองแท็กแปลว่า "ทริปไหน" ยังไม่มีคำตอบเดียว — ยุบเป็นอันแรกคือเดาแทนคนถาม
+   * และตอบยอดของทั้งสองรวมกันคือตัวเลขที่ไม่มีใครขอ
+   */
+  it('มากกว่าหนึ่งแท็กยังไม่เปิดใช้', () => {
+    expect(
+      decideReply({ surface: 'group', addressed: true }, { kind: 'command', command: 'balance', args: '#เชียงใหม่ #ปีใหม่' }),
+    ).toEqual({ kind: 'not-available', what: 'command' })
+  })
+
+  it('`#` เปล่าๆ ไม่ใช่แท็ก', () => {
+    expect(
+      decideReply({ surface: 'group', addressed: true }, { kind: 'command', command: 'balance', args: '#' }),
+    ).toEqual({ kind: 'not-available', what: 'command' })
+    expect(
+      decideReply({ surface: 'group', addressed: true }, { kind: 'command', command: 'balance', args: 'เชียงใหม่' }),
+    ).toEqual({ kind: 'not-available', what: 'command' })
+  })
+
+  // กฎเงียบมาก่อนทุกอย่าง — คนที่ไม่ได้เรียกบอทไม่ควรได้ยินอะไรเลย (D47)
+  it('ในกลุ่มที่ไม่ได้เรียกบอท ยังเงียบเหมือนเดิม', () => {
+    expect(
+      decideReply({ surface: 'group', addressed: false }, { kind: 'command', command: 'balance', args: '#เชียงใหม่' }),
+    ).toEqual({ kind: 'silent' })
   })
 })
 
@@ -114,7 +168,7 @@ describe('decideReply — D47: คำสั่งคีย์เวิร์ด�
 
   it('คีย์เวิร์ดที่มี args เปล่าๆ ในกลุ่มก็เงียบ', () => {
     expect(
-      decideReply({ surface: 'group', addressed: false }, { kind: 'command', command: 'balance', args: '#เชียงใหม่' }),
+      decideReply({ surface: 'group', addressed: false }, { kind: 'command', command: 'nudge', args: '#เชียงใหม่' }),
     ).toEqual({ kind: 'silent' })
   })
 

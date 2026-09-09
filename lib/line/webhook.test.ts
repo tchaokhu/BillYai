@@ -777,9 +777,10 @@ describe('handleLineWebhook — `ยอด` (M7)', () => {
     expect(loadBalance).toHaveBeenCalledWith(null, USER_ID)
   })
 
-  it('`ยอด #tag` ยังไม่เปิดใช้ ไม่แตะ ledger เลย (D34)', async () => {
-    const { calls, loadBalance } = await run([groupCommand('ยอด #เชียงใหม่')])
-    expect(loadBalance).not.toHaveBeenCalled()
+  // `ยอด #tag` เปิดใช้แล้ว (D60) — ส่วนต่อท้ายของคำสั่งอื่นยังไม่เปิด
+  it('คำสั่งอื่นที่มีส่วนต่อท้ายยังไม่เปิดใช้ ไม่แตะ ledger เลย (D34)', async () => {
+    const { calls, loadBillList } = await run([groupCommand('บิล #เชียงใหม่')])
+    expect(loadBillList).not.toHaveBeenCalled()
     expect(firstText(calls[0]?.messages ?? [])).toContain('ยังไม่เปิดใช้')
   })
 })
@@ -1019,5 +1020,117 @@ describe('handleLineWebhook — วาดการ์ดใหม่หลัง
     })
     expect(result.status).toBe(500)
     expect(calls).toHaveLength(0)
+  })
+})
+
+/**
+ * `@บิลใหญ่ ยอด #เชียงใหม่` — **สรุปทริป ไม่ใช่ยอดค้าง** (D60)
+ *
+ * `settlement` ไม่มี `event_tag` การกรองตามแท็กจึงหักเงินที่จ่ายคืนกันแล้วไม่ได้ ·
+ * คำบนการ์ดเป็นตัวบอกเรื่องนั้น ชั้นนี้แค่ส่งแท็กลงไปให้ถูกที่
+ */
+describe('handleLineWebhook — `ยอด #tag` (D60)', () => {
+  const BLOCKS = [
+    {
+      creditorName: 'กอล์ฟ',
+      totalSatang: 90000,
+      rows: [{ debtorName: 'ตูน', amountSatang: 90000 }],
+    },
+  ]
+
+  it('ส่งแท็กลงไปให้ ledger กรอง', async () => {
+    const { loadBalance } = await run([groupCommand('ยอด #เชียงใหม่')])
+    expect(loadBalance).toHaveBeenCalledWith(GROUP_ID, USER_ID, 'เชียงใหม่')
+  })
+
+  it('`ยอด` เปล่าๆ ไม่ส่งแท็กลงไป', async () => {
+    const { loadBalance } = await run([groupCommand('ยอด')])
+    expect(loadBalance).toHaveBeenCalledWith(GROUP_ID, USER_ID)
+  })
+
+  it('ได้การ์ดที่พูดว่าสรุป ไม่ใช่ยอดค้าง', async () => {
+    const body = JSON.stringify({ events: [groupCommand('ยอด #เชียงใหม่')] })
+    const fake = fakeReply()
+    const db = fakeDb()
+    db.loadBalance.mockResolvedValue({ kind: 'debts', blocks: BLOCKS })
+    await handleLineWebhook(
+      { rawBody: body, signature: sign(body), channelSecret: SECRET },
+      { reply: fake.reply, ...db, now: fakeClock() },
+    )
+    const json = JSON.stringify(fake.calls[0]?.messages)
+    expect(json).toContain('สรุป #เชียงใหม่')
+    expect(json).not.toContain('ค้าง')
+  })
+
+  /**
+   * ตอบไกด์ใส่คนที่เพิ่งพิมพ์ชื่อแท็กมาเองคือตอบผิดคำถาม — ไกด์เป็นคำตอบของวงที่
+   * ยังไม่เคยใช้ ส่วนคนนี้ใช้เป็นแล้วและถามถึงทริปที่ไม่มีบิล
+   */
+  it('แท็กที่ไม่มีบิลบอกตรงๆ ไม่ใช่ตอบไกด์', async () => {
+    const body = JSON.stringify({ events: [groupCommand('ยอด #ปีใหม่')] })
+    const fake = fakeReply()
+    const db = fakeDb()
+    db.loadBalance.mockResolvedValue('no-bills-for-tag')
+    await handleLineWebhook(
+      { rawBody: body, signature: sign(body), channelSecret: SECRET },
+      { reply: fake.reply, ...db, now: fakeClock() },
+    )
+    const text = firstText(fake.calls[0]?.messages ?? []) ?? ''
+    expect(text).toContain('#ปีใหม่')
+    expect(text).not.toContain('บิลใหญ่ช่วยจด')
+  })
+
+  it('แท็กที่หารกันลงตัวแล้วบอกชื่อแท็กด้วย', async () => {
+    const body = JSON.stringify({ events: [groupCommand('ยอด #เชียงใหม่')] })
+    const fake = fakeReply()
+    const db = fakeDb()
+    db.loadBalance.mockResolvedValue({ kind: 'settled' })
+    await handleLineWebhook(
+      { rawBody: body, signature: sign(body), channelSecret: SECRET },
+      { reply: fake.reply, ...db, now: fakeClock() },
+    )
+    const text = firstText(fake.calls[0]?.messages ?? []) ?? ''
+    expect(text).toContain('#เชียงใหม่')
+    expect(text).not.toContain('ค้าง')
+  })
+
+  it('วงที่ยังไม่เคยจดบิลเลย ยังตอบไกด์เหมือนเดิม', async () => {
+    const body = JSON.stringify({ events: [groupCommand('ยอด #เชียงใหม่')] })
+    const fake = fakeReply()
+    const db = fakeDb()
+    db.loadBalance.mockResolvedValue('no-bills')
+    await handleLineWebhook(
+      { rawBody: body, signature: sign(body), channelSecret: SECRET },
+      { reply: fake.reply, ...db, now: fakeClock() },
+    )
+    expect(firstText(fake.calls[0]?.messages ?? [])).toContain('บิลใหญ่ช่วยจด')
+  })
+
+  it('ในกลุ่มที่ไม่ได้เรียกบอท ยังเงียบ', async () => {
+    const { calls, loadBalance } = await run([groupText('ยอด #เชียงใหม่')])
+    expect(loadBalance).not.toHaveBeenCalled()
+    expect(calls).toHaveLength(0)
+  })
+})
+
+/**
+ * `no-bills-for-tag` เกิดได้เฉพาะตอนมีแท็ก — ถ้ามาโดยไม่มี แปลว่า repo ผิดสัญญา
+ *
+ * แปะ `#` เปล่าๆ ลงข้อความจะได้ประโยคที่อ่านไม่รู้เรื่อง · ตกกลับไปตอบไกด์ซึ่งยัง
+ * ใช้ได้กับคนอ่าน ดีกว่าส่งข้อความที่ไม่มีความหมายออกไป
+ */
+describe('handleLineWebhook — `no-bills-for-tag` ที่มาโดยไม่มีแท็ก', () => {
+  it('ไม่ส่ง `#` เปล่าๆ ออกไป', async () => {
+    const body = JSON.stringify({ events: [groupCommand('ยอด')] })
+    const fake = fakeReply()
+    const db = fakeDb()
+    db.loadBalance.mockResolvedValue('no-bills-for-tag')
+    await handleLineWebhook(
+      { rawBody: body, signature: sign(body), channelSecret: SECRET },
+      { reply: fake.reply, ...db, now: fakeClock() },
+    )
+    const text = firstText(fake.calls[0]?.messages ?? []) ?? ''
+    expect(text).not.toContain('ติด #')
+    expect(text).toContain('บิลใหญ่ช่วยจด')
   })
 })
