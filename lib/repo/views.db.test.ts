@@ -8,13 +8,13 @@
 import { randomUUID } from 'node:crypto'
 import { afterAll, describe, expect, it } from 'vitest'
 import { closePool } from '@/lib/db/client'
-import { makeGroup, makeMembers } from '@/lib/db/fixtures'
+import { makeAppUser, makeExpense, makeGroup, makeMember, makeMembers } from '@/lib/db/fixtures'
 import { confirmDraft } from './confirm'
 import { createDraft } from './drafts'
 import { markMemberLeft } from './members'
 import { commitExpense, voidExpense } from './expenses'
 import { splitExpense } from '@/lib/split'
-import { loadBalance, loadBillDetail, loadBillList, loadGroupView } from './views'
+import { loadBalance, loadBillDetail, loadBillList, loadGroupView, voidBill } from './views'
 import type { DraftLine, ExpenseDraft } from '@/lib/types'
 
 afterAll(async () => {
@@ -558,5 +558,203 @@ describe('loadBalance — กรองตามแท็ก (D60)', () => {
     const view = await loadBalance(null, lineUserId, 'เชียงใหม่')
     if (typeof view === 'string' || view.kind !== 'debts') throw new Error('ต้องมีตัวเลข')
     expect(view.blocks[0]?.creditorName).toBe('ฉัน')
+  })
+})
+
+/**
+ * ยกเลิกบิล (D61) — **สิทธิ์ตาม D11: คนจด หรือคนจ่าย**
+ *
+ * `expense` ไม่เคยถูกลบ (`voidExpense` มาร์ก `status` เท่านั้น) เพราะ `computeDebts`
+ * ต้องเห็นว่าเคยมีบิลใบนี้ · การ์ดรายละเอียดลอยอยู่ในแชทได้ตลอดกาล ปุ่มบนนั้นจึงถูก
+ * กดโดยใครก็ได้ ด่านสิทธิ์อยู่ที่นี่ ไม่ใช่ที่ปุ่ม
+ */
+describe('voidBill — ยกเลิกบิล (D61)', () => {
+  async function billFrom(
+    lineGroupId: string | null,
+    lineUserId: string,
+    payerName: string,
+  ): Promise<string> {
+    await recordBill(lineGroupId, lineUserId, payerName)
+    const list = await loadBillList(lineGroupId, lineUserId)
+    if (list === 'no-bills') throw new Error('ต้องมีบิล')
+    const first = list.bills[0]
+    if (first === undefined) throw new Error('ต้องมีบิล')
+    return first.id
+  }
+
+  it('คนจด (ซึ่งเป็นคนจ่ายด้วย) ยกเลิกได้ และได้ชื่อกับยอดกลับมาไปประกาศ', async () => {
+    const lineGroupId = fakeLineGroupId()
+    const lineUserId = fakeLineUserId()
+    const expenseId = await billFrom(lineGroupId, lineUserId, 'เบียร์')
+
+    expect(await voidBill({ expenseId, lineGroupId, lineUserId })).toEqual({
+      kind: 'voided',
+      description: 'ข้าว',
+      totalSatang: 120000,
+    })
+  })
+
+  it('ยกเลิกแล้วยอดหายจากยอดค้างทันที', async () => {
+    const lineGroupId = fakeLineGroupId()
+    const lineUserId = fakeLineUserId()
+    const expenseId = await billFrom(lineGroupId, lineUserId, 'เบียร์')
+
+    await voidBill({ expenseId, lineGroupId, lineUserId })
+
+    expect(await loadBalance(lineGroupId, lineUserId)).toEqual({ kind: 'settled' })
+  })
+
+  it('ยกเลิกแล้วบิลหายจากรายการ `บิล`', async () => {
+    const lineGroupId = fakeLineGroupId()
+    const lineUserId = fakeLineUserId()
+    const expenseId = await billFrom(lineGroupId, lineUserId, 'เบียร์')
+
+    await voidBill({ expenseId, lineGroupId, lineUserId })
+
+    expect(await loadBillList(lineGroupId, lineUserId)).toBe('no-bills')
+  })
+
+  /** claim ตัวตนแล้วยังไม่พอ — ต้องเป็นคนจดหรือคนจ่ายของ**บิลใบนั้น** (D11) */
+  it('คนที่ claim ตัวตนแล้วแต่ไม่ใช่คนจดและไม่ใช่คนจ่าย ยกเลิกไม่ได้', async () => {
+    const lineGroupId = fakeLineGroupId()
+    const typer = fakeLineUserId()
+    const expenseId = await billFrom(lineGroupId, typer, 'เบียร์')
+
+    // กอล์ฟอยู่ในบิลอยู่แล้ว — ให้เขา claim ตัวตนแล้วจดบิลของตัวเองที่เบียร์เป็นคนจ่าย
+    const payer = fakeLineUserId()
+    const created = await createDraft({
+      lineGroupId,
+      lineUserId: payer,
+      draft: { ...DRAFT, description: 'เหล้า', totalSatang: 60000, participants: [{ name: 'กอล์ฟ', weight: 1 }] },
+      lines: [{ name: 'กอล์ฟ', amountSatang: 60000, isNew: false, isPayer: false }],
+      spentAt: '2026-08-30',
+    })
+    const result = await confirmDraft({
+      draftId: created.id,
+      lineUserId: payer,
+      payer: { kind: 'new', displayName: 'แนน' },
+    })
+    if (result.kind !== 'committed') throw new Error('ยืนยันไม่สำเร็จ')
+
+    // แนนไม่ได้จดบิลใบแรกและไม่ได้จ่ายด้วย — ยกเลิกไม่ได้
+    expect(await voidBill({ expenseId, lineGroupId, lineUserId: payer })).toEqual({
+      kind: 'not-allowed',
+    })
+  })
+
+  /**
+   * **ขาที่สองของ D11** — คนที่ควักเงินไปก่อนคือคนที่รู้ดีที่สุดว่าบิลใบนั้นผิด
+   *
+   * เส้นทางแชทวันนี้ทำให้คนจดกับคนจ่ายเป็นคนเดียวกันเสมอ (`commitExpense` ตั้งทั้งคู่
+   * จากคนที่กดยืนยัน) แยกสองค่านี้ออกจากกันได้ด้วย fixture เท่านั้น — แต่ด่านสิทธิ์
+   * ต้องรับได้ตั้งแต่วันนี้ ไม่ใช่รอวันที่มีทางเขียนบิลแทนคนอื่น
+   */
+  it('คนจ่ายที่ไม่ได้เป็นคนจด ยกเลิกได้', async () => {
+    const lineGroupId = fakeLineGroupId()
+    const group = await makeGroup(undefined, { lineGroupId })
+    const payerLineUserId = fakeLineUserId()
+    const appUser = await makeAppUser(undefined, { lineUserId: payerLineUserId })
+    const payer = await makeMember(group.id, 'เบียร์', undefined, { appUserId: appUser.id })
+    const [creator, golf] = await makeMembers(group.id, ['คนจด', 'กอล์ฟ'])
+    if (creator === undefined || golf === undefined) throw new Error('ต้องมีสมาชิกครบ')
+
+    const expense = await makeExpense({
+      groupId: group.id,
+      payerMemberId: payer.id,
+      createdBy: creator.id,
+      description: 'ข้าว',
+      totalSatang: 60000,
+      shares: [{ memberId: golf.id, amountSatang: 60000 }],
+    })
+
+    expect(
+      await voidBill({ expenseId: expense.id, lineGroupId, lineUserId: payerLineUserId }),
+    ).toEqual({ kind: 'voided', description: 'ข้าว', totalSatang: 60000 })
+  })
+
+  it('คนอื่นในวงยกเลิกไม่ได้', async () => {
+    const lineGroupId = fakeLineGroupId()
+    const lineUserId = fakeLineUserId()
+    const expenseId = await billFrom(lineGroupId, lineUserId, 'เบียร์')
+    // อีกคนที่ claim ตัวตนแล้วในวงเดียวกัน
+    await recordBill(lineGroupId, fakeLineUserId(), 'แนน', [
+      { name: 'กอล์ฟ', amountSatang: 30000, isNew: false, isPayer: false },
+    ], { ...DRAFT, totalSatang: 30000, participants: [{ name: 'กอล์ฟ', weight: 1 }] })
+
+    const other = await loadBillList(lineGroupId, lineUserId)
+    if (other === 'no-bills') throw new Error('ต้องมีบิล')
+
+    expect(await voidBill({ expenseId, lineGroupId, lineUserId: fakeLineUserId() })).toEqual({
+      kind: 'needs-identity',
+    })
+  })
+
+  it('บิลของวงอื่นตอบ `not-found` — ไม่บอกว่ามันมีอยู่จริงที่อื่น', async () => {
+    const lineUserId = fakeLineUserId()
+    const expenseId = await billFrom(fakeLineGroupId(), lineUserId, 'เบียร์')
+
+    expect(
+      await voidBill({ expenseId, lineGroupId: fakeLineGroupId(), lineUserId }),
+    ).toEqual({ kind: 'not-found' })
+  })
+
+  it('id ที่ไม่ใช่ uuid คือไม่เจอ ไม่ใช่พัง', async () => {
+    expect(
+      await voidBill({
+        expenseId: 'ไม่ใช่ยูยูไอดี',
+        lineGroupId: fakeLineGroupId(),
+        lineUserId: fakeLineUserId(),
+      }),
+    ).toEqual({ kind: 'not-found' })
+  })
+
+  // กดปุ่มซ้ำบนการ์ดใบเดิม — ต่างจากหาไม่เจอ และต้องไม่โยน
+  it('ยกเลิกซ้ำตอบ `already-voided` ไม่ใช่ throw', async () => {
+    const lineGroupId = fakeLineGroupId()
+    const lineUserId = fakeLineUserId()
+    const expenseId = await billFrom(lineGroupId, lineUserId, 'เบียร์')
+
+    await voidBill({ expenseId, lineGroupId, lineUserId })
+
+    expect(await voidBill({ expenseId, lineGroupId, lineUserId })).toEqual({
+      kind: 'already-voided',
+    })
+  })
+
+  it('แชท 1:1 ยกเลิกบิลของวงส่วนตัวตัวเองได้', async () => {
+    const lineUserId = fakeLineUserId()
+    const expenseId = await billFrom(null, lineUserId, 'ฉัน')
+
+    expect(await voidBill({ expenseId, lineGroupId: null, lineUserId })).toMatchObject({
+      kind: 'voided',
+    })
+  })
+
+  it('ยอดที่ประกาศรวมส่วนปรับแล้ว ไม่ใช่ยอดดิบในคอลัมน์', async () => {
+    const lineGroupId = fakeLineGroupId()
+    const lineUserId = fakeLineUserId()
+    const created = await createDraft({
+      lineGroupId,
+      lineUserId,
+      draft: { ...DRAFT, totalSatang: 100000, adjustmentSatang: 20000 },
+      lines: LINES,
+      spentAt: '2026-08-30',
+    })
+    const result = await confirmDraft({
+      draftId: created.id,
+      lineUserId,
+      payer: { kind: 'new', displayName: 'เบียร์' },
+    })
+    if (result.kind !== 'committed') throw new Error('ยืนยันไม่สำเร็จ')
+    const list = await loadBillList(lineGroupId, lineUserId)
+    if (list === 'no-bills') throw new Error('ต้องมีบิล')
+    const first = list.bills[0]
+    if (first === undefined) throw new Error('ต้องมีบิล')
+
+    expect(await voidBill({ expenseId: first.id, lineGroupId, lineUserId })).toEqual({
+      kind: 'voided',
+      description: 'ข้าว',
+      totalSatang: 120000,
+    })
   })
 })

@@ -604,6 +604,7 @@ describe('balanceCardMessage — วงที่ใหญ่เกินหน�
 
 describe('billDetailCardMessage — บิลใบเดียว', () => {
   const DETAIL = {
+    expenseId: '9c1f2a5e-0000-4000-8000-0000000000ab',
     description: 'ตี๋น้อย',
     date: '1 ก.ย. 69',
     payerName: 'นัท',
@@ -741,8 +742,14 @@ describe('billDetailCardMessage — บิลใบเดียว', () => {
     expect(texts).toContain('จ่าย')
   })
 
-  it('ไม่มีปุ่ม — บิลลง ledger ไปแล้ว ไม่มีอะไรให้กดยืนยันอีก', () => {
-    expect(allPostbackData(billDetailCardMessage(DETAIL)[0])).toEqual([])
+  /**
+   * **ไม่มีปุ่มยืนยัน** — บิลลง ledger ไปแล้ว ไม่มีอะไรให้กดยืนยันอีก · ปุ่มเดียว
+   * บนการ์ดนี้คือ `ยกเลิกบิล` (D61) ซึ่งเป็นคนละเรื่องกัน
+   */
+  it('ปุ่มเดียวบนการ์ดคือยกเลิกบิล ไม่มีปุ่มยืนยัน', () => {
+    expect(allPostbackData(billDetailCardMessage(DETAIL)[0])).toEqual([
+      `void=${DETAIL.expenseId}`,
+    ])
   })
 })
 
@@ -772,6 +779,7 @@ describe('billListCardMessage — ของที่ยาวเกินเพ�
 describe('billDetailCardMessage — ขนาดกับคนจ่าย', () => {
   function detail(lineCount: number, payerName = 'นัท') {
     return {
+      expenseId: '9c1f2a5e-0000-4000-8000-0000000000ab',
       description: 'ตี๋น้อย',
       date: '1 ก.ย. 69',
       payerName,
@@ -1110,5 +1118,91 @@ describe('balanceCardMessage — บรรทัดเตือนชี้ท�
       if (message.type !== 'text') throw new Error('ต้องเป็นข้อความ')
       expect(message.text).toContain('ยอดค้างทั้งวง')
     }
+  })
+})
+
+/**
+ * ปุ่ม `ยกเลิกบิล` บนการ์ดรายละเอียด (D61)
+ *
+ * **สิทธิ์ไม่ได้อยู่ที่ปุ่ม** — การ์ดใบเดียวถูกส่งเข้ากลุ่มให้ทุกคนเห็นเหมือนกันหมด
+ * ซ่อนตามคนดูทำไม่ได้ · ด่าน D11 (คนจด หรือคนจ่าย) อยู่ที่ `voidBill` ฝั่ง repo ·
+ * เกณฑ์เดียวกับปุ่ม `จดรายชิ้น` ของ D56
+ */
+describe('billDetailCardMessage — ปุ่มยกเลิกบิล (D61)', () => {
+  const EXPENSE_ID = '9c1f2a5e-0000-4000-8000-0000000000ab'
+  const DETAIL = {
+    expenseId: EXPENSE_ID,
+    description: 'ตี๋น้อย',
+    date: '1 ก.ย. 69',
+    payerName: 'นัท',
+    totalSatang: 90000,
+    lines: [
+      { name: 'นัท', amountSatang: 30000, isPayer: true },
+      { name: 'เดียร์', amountSatang: 30000, isPayer: false },
+    ],
+  }
+
+  it('มีปุ่มที่ถือ id ของบิล', () => {
+    expect(findPostbackData(billDetailCardMessage(DETAIL))).toBe(`void=${EXPENSE_ID}`)
+  })
+
+  /** postback data มีเพดาน 300 ตัวอักษร และค่านี้ต้องไม่โตตามขนาดบิล (ADR 0001) */
+  it('postback ยาวคงที่ ไม่โตตามจำนวนคนในบิล', () => {
+    const big = {
+      ...DETAIL,
+      lines: Array.from({ length: 40 }, (_, i) => ({
+        name: `เพื่อนคนที่ ${i}`,
+        amountSatang: 2250,
+        isPayer: false,
+      })),
+    }
+    expect(findPostbackData(billDetailCardMessage(big))).toBe(
+      findPostbackData(billDetailCardMessage(DETAIL)),
+    )
+    expect((findPostbackData(billDetailCardMessage(big)) ?? '').length).toBeLessThanOrEqual(64)
+  })
+
+  /** ปุ่มที่อยู่ใบเดียวคือปุ่มที่คนเลื่อนผ่านแล้วหาไม่เจอ — เกณฑ์เดียวกับ D52 */
+  it('ทุก bubble ของ carousel มีปุ่มนี้', () => {
+    const big = {
+      ...DETAIL,
+      lines: Array.from({ length: 90 }, (_, i) => ({
+        name: `เพื่อนหมายเลข ${i}`,
+        amountSatang: 1000,
+        isPayer: false,
+      })),
+    }
+    const [message] = billDetailCardMessage(big)
+    if (message?.type !== 'flex') throw new Error('ต้องยังเป็นการ์ด')
+    const bubbles = bubblesOf(message)
+    expect(bubbles.length).toBeGreaterThan(1)
+    for (const bubble of bubbles) {
+      expect(findPostbackData(bubble)).toBe(`void=${EXPENSE_ID}`)
+    }
+  })
+
+  /**
+   * ทางลงเป็นข้อความก็ยังต้องกดยกเลิกได้ — postback ติดกับ text ได้ผ่าน quick reply
+   * (เกณฑ์เดียวกับ D59) · quick reply เกาะก้อนสุดท้ายเพราะ LINE แสดงของก้อนสุดท้าย
+   */
+  it('ทางลงเป็นข้อความก็ยังมีปุ่ม และอยู่ก้อนสุดท้าย', () => {
+    const huge = {
+      ...DETAIL,
+      lines: Array.from({ length: 600 }, (_, i) => ({
+        name: `เพื่อนหมายเลข ${i}`,
+        amountSatang: 150,
+        isPayer: false,
+      })),
+    }
+    const messages = billDetailCardMessage(huge)
+    for (const message of messages) expect(message.type).toBe('text')
+    const last = messages[messages.length - 1]
+    expect(findPostbackData(last)).toBe(`void=${EXPENSE_ID}`)
+    expect(findPostbackData(messages.slice(0, -1))).toBeNull()
+  })
+
+  it('ปุ่มบอกตรงๆ ว่าทำอะไร', () => {
+    // `allText` เก็บเฉพาะ `text` — ป้ายปุ่มอยู่ใน `action.label`
+    expect(JSON.stringify(billDetailCardMessage(DETAIL))).toContain('ยกเลิกบิล')
   })
 })

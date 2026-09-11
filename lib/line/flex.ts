@@ -942,6 +942,13 @@ function paginate(header: FlexComponent[], rows: FlexComponent[]): FlexBubble[] 
  * ส่วนที่นี่คือของเก่าที่ถูกเปิดขึ้นมาดู วันที่คือครึ่งหนึ่งของคำตอบ
  */
 export function billDetailCardMessage(detail: {
+  /**
+   * id ของบิล — ปุ่ม `ยกเลิกบิล` ถือค่านี้กลับมา (D61)
+   *
+   * **สิทธิ์ไม่ได้อยู่ที่ปุ่ม** การ์ดใบเดียวถูกส่งเข้ากลุ่มให้ทุกคนเห็นเหมือนกันหมด
+   * ซ่อนตามคนดูทำไม่ได้อยู่แล้ว · ด่าน D11 อยู่ที่ `voidBill` — เกณฑ์เดียวกับ D56
+   */
+  expenseId: string
   description: string
   date: string
   payerName: string
@@ -984,6 +991,29 @@ export function billDetailCardMessage(detail: {
   ]
   /** หัวการ์ดที่ต้องซ้ำทุก bubble ตอนกลายเป็น carousel */
   const header = [...contents]
+
+  /**
+   * **ปุ่มอยู่ทุกใบ** — ปุ่มที่อยู่ใบเดียวคือปุ่มที่คนเลื่อนผ่านแล้วหาไม่เจอ (D52) ·
+   * `secondary` เพราะนี่ไม่ใช่สิ่งที่คนเปิดการ์ดนี้ตั้งใจมาทำ
+   */
+  const voidFooter: FlexBox = {
+    type: 'box',
+    layout: 'vertical',
+    contents: [
+      {
+        type: 'button',
+        style: 'secondary',
+        height: 'sm',
+        action: {
+          type: 'postback',
+          label: 'ยกเลิกบิล',
+          // **id เท่านั้น** สั้นและยาวคงที่ ไม่โตตามขนาดบิล (ADR 0001)
+          data: `void=${detail.expenseId}`,
+          displayText: 'ยกเลิกบิล',
+        },
+      },
+    ],
+  }
   const itemRows: FlexComponent[] = []
 
   /**
@@ -1021,6 +1051,7 @@ export function billDetailCardMessage(detail: {
     contents: {
       type: 'bubble',
       body: { type: 'box', layout: 'vertical', contents },
+      footer: voidFooter,
     },
   }
   if (Buffer.byteLength(JSON.stringify(bubble), 'utf8') <= MAX_BUBBLE_BYTES) return [bubble]
@@ -1042,7 +1073,11 @@ export function billDetailCardMessage(detail: {
     const carousel: LineFlexMessage = {
       type: 'flex',
       altText: bubble.altText,
-      contents: { type: 'carousel', contents: pages },
+      contents: {
+        type: 'carousel',
+        // ปุ่มยกเลิกอยู่ทุกใบด้วยเกณฑ์เดียวกับหัวการ์ด (D52)
+        contents: pages.map((page) => ({ ...page, footer: voidFooter })),
+      },
     }
     if (Buffer.byteLength(JSON.stringify(carousel), 'utf8') <= MAX_CAROUSEL_BYTES) {
       return [carousel]
@@ -1082,10 +1117,37 @@ export function billDetailCardMessage(detail: {
   }
   chunks.push(current)
 
-  if (chunks.length > MAX_MESSAGES) {
-    const kept = chunks.slice(0, MAX_MESSAGES - 1)
-    kept.push(`ยังมีต่ออีก ${chunks.length - kept.length} ส่วนที่ยาวเกินกว่าจะส่งในครั้งเดียว`)
-    return kept.map((text) => ({ type: 'text', text }))
-  }
-  return chunks.map((text) => ({ type: 'text', text }))
+  const kept =
+    chunks.length > MAX_MESSAGES
+      ? [
+          ...chunks.slice(0, MAX_MESSAGES - 1),
+          `ยังมีต่ออีก ${chunks.length - (MAX_MESSAGES - 1)} ส่วนที่ยาวเกินกว่าจะส่งในครั้งเดียว`,
+        ]
+      : chunks
+
+  /**
+   * **postback ติดกับข้อความได้ทาง quick reply** — ทางลงที่กดยกเลิกไม่ได้แปลว่า
+   * บิลใหญ่พอจะอ่านไม่ไหวก็ยกเลิกไม่ได้ไปด้วย ทั้งที่นั่นคือใบที่อยากยกเลิกที่สุด ·
+   * เกาะก้อนสุดท้ายเพราะ LINE แสดง quick reply ของก้อนสุดท้าย
+   */
+  return kept.map((text, index) => {
+    const message: LineTextMessage = { type: 'text', text }
+    if (index < kept.length - 1) return message
+    return {
+      ...message,
+      quickReply: {
+        items: [
+          {
+            type: 'action' as const,
+            action: {
+              type: 'postback' as const,
+              label: 'ยกเลิกบิล',
+              data: `void=${detail.expenseId}`,
+              displayText: 'ยกเลิกบิล',
+            },
+          },
+        ],
+      },
+    }
+  })
 }

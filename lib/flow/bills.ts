@@ -70,6 +70,8 @@ export interface BillDetailLine {
 }
 
 export interface BillDetailInput {
+  /** id ของบิล — ปุ่ม `ยกเลิกบิล` บนการ์ดถือค่านี้กลับมา (D61) */
+  expenseId: string
   description: string
   spentAt: string
   /**
@@ -98,6 +100,7 @@ export interface BillDetailItem {
 }
 
 export interface BillDetailView {
+  expenseId: string
   description: string
   date: string
   payerName: string
@@ -119,6 +122,7 @@ export interface BillDetailView {
 export function buildBillDetail(input: BillDetailInput): BillDetailView {
   const lines = input.lines.map((line) => ({ ...line }))
   return {
+    expenseId: input.expenseId,
     description: input.description,
     date: thaiShortDate(input.spentAt),
     payerName: input.payerName,

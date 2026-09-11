@@ -70,6 +70,14 @@ export interface GroupView {
   unclaimed: readonly IdentityChoice[]
 }
 
+/** ผลของการยกเลิกบิล — ตรงกับ `VoidBillResult` ของ `lib/repo/views.ts` (D61) */
+export type VoidBillOutcome =
+  | { kind: 'voided'; description: string; totalSatang: number }
+  | { kind: 'not-found' }
+  | { kind: 'already-voided' }
+  | { kind: 'not-allowed' }
+  | { kind: 'needs-identity' }
+
 /** ผลของการกดยืนยัน — ตรงกับ `ConfirmDraftResult` ของ `lib/repo/confirm.ts` */
 export type ConfirmOutcome =
   | { kind: 'committed'; description: string; totalSatang: number }
@@ -148,6 +156,17 @@ export interface LineWebhookDeps {
     | { lineUserId: string; draft: ExpenseDraft; lines: readonly DraftLine[] }
     | 'not-found'
   >
+  /**
+   * ยกเลิกบิลหนึ่งใบ (D61) — **ด่านสิทธิ์ D11 อยู่ฝั่ง repo ไม่ใช่ที่ปุ่ม**
+   *
+   * ปุ่มบนการ์ดรายละเอียดกดได้ทุกคนเพราะการ์ดลอยอยู่ในกลุ่มให้ทุกคนเห็น
+   * (เกณฑ์เดียวกับ D56) · คืนชื่อกับยอดมาด้วยเพราะต้องประกาศกลับเข้ากลุ่ม
+   */
+  voidBill: (input: {
+    expenseId: string
+    lineGroupId: string | null
+    lineUserId: string
+  }) => Promise<VoidBillOutcome>
   /** นาฬิกาหน่วย ms — แยกออกมาเพื่อให้เทสต์กำหนดค่าได้ */
   now?: () => number
 }
@@ -363,6 +382,58 @@ async function messagesForPostback(
     if (detail === 'not-found') return renderReply({ kind: 'bill-not-found' }, surface)
     if (detail === 'voided') return renderReply({ kind: 'bill-voided' }, surface)
     return billDetailCardMessage(buildBillDetail(detail))
+  }
+
+  /**
+   * `void=<expenseId>` ถาม · `void=<expenseId>&yes=1` ลงมือ (D61)
+   *
+   * **สองจังหวะ** เพราะการ์ดรายละเอียดลอยอยู่ในแชทตลอดกาลและกดได้ทุกเมื่อ ·
+   * จังหวะเดียวแล้วยอดของทุกคนในวงขยับคือสิ่งที่จังหวะที่สองมีไว้กัน
+   */
+  const params = new URLSearchParams(event.data)
+  const voidId = params.get('void')
+  if (voidId !== null && voidId !== '') {
+    const lineUserId = event.source.lineUserId
+    if (lineUserId === null) return renderReply({ kind: 'unknown-sender' }, surface)
+    const lineGroupId = event.source.kind === 'group' ? event.source.lineGroupId : null
+
+    if (params.get('yes') !== '1') {
+      /**
+       * จังหวะแรกอ่านอย่างเดียว — ใช้ `loadBillDetail` ตัวเดิมเพราะคำถามต้องมีชื่อ
+       * กับยอดของบิลอยู่ในนั้น และมันสโคปตามวงให้แล้ว
+       */
+      const detail = await deps.loadBillDetail({ expenseId: voidId, lineGroupId, lineUserId })
+      if (detail === 'not-found') return renderReply({ kind: 'bill-not-found' }, surface)
+      if (detail === 'voided') return renderReply({ kind: 'bill-voided' }, surface)
+      const view = buildBillDetail(detail)
+      return renderReply(
+        {
+          kind: 'confirm-void',
+          expenseId: voidId,
+          description: view.description,
+          totalSatang: view.totalSatang,
+        },
+        surface,
+      )
+    }
+
+    const outcome = await deps.voidBill({ expenseId: voidId, lineGroupId, lineUserId })
+    switch (outcome.kind) {
+      case 'voided':
+        return renderReply(
+          { kind: 'bill-void-done', description: outcome.description, totalSatang: outcome.totalSatang },
+          surface,
+        )
+      case 'not-found':
+        // ตอบเหมือนหาไม่เจอทั้งกรณีไม่มีจริงและกรณีอยู่คนละวง — เกณฑ์เดียวกับ D45
+        return renderReply({ kind: 'bill-not-found' }, surface)
+      case 'already-voided':
+        return renderReply({ kind: 'bill-voided' }, surface)
+      case 'not-allowed':
+        return renderReply({ kind: 'bill-void-not-allowed' }, surface)
+      case 'needs-identity':
+        return renderReply({ kind: 'bill-void-needs-identity' }, surface)
+    }
   }
 
   const parsed = parseConfirmData(event.data)

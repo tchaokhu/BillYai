@@ -177,3 +177,80 @@ describe('renderReply — คำสั่งที่แนะนำต้อง
     expect(message?.text).not.toContain('ค้าง')
   })
 })
+
+/**
+ * ข้อความที่ผู้ใช้อ่าน **ห้ามอ้างรหัสการตัดสินใจ** — `D11` `D26` เป็นของในเอกสาร
+ *
+ * รหัสพวกนี้หลุดง่ายมากเวลาเขียนคอมเมนต์กับข้อความในบรรทัดติดกัน · เทสต์นี้กวาด
+ * ทุก plan ทีเดียวเพื่อให้ตัวที่เพิ่มเข้ามาทีหลังถูกคุมไปด้วยโดยไม่ต้องจำ
+ */
+describe('renderReply — ไม่มีรหัสการตัดสินใจหลุดออกไปในแชท', () => {
+  const PLANS = [
+    { kind: 'guide' as const },
+    { kind: 'need-names' as const },
+    { kind: 'unknown-sender' as const },
+    { kind: 'committed' as const, description: 'ข้าว', totalSatang: 120000 },
+    { kind: 'draft-gone' as const },
+    { kind: 'name-taken' as const, name: 'กอล์ฟ' },
+    { kind: 'name-in-bill' as const, name: 'กอล์ฟ' },
+    { kind: 'needs-identity' as const },
+    { kind: 'no-display-name' as const },
+    { kind: 'settled' as const },
+    { kind: 'no-bills-for-tag' as const, tag: 'เชียงใหม่' },
+    { kind: 'settled-for-tag' as const, tag: 'เชียงใหม่' },
+    { kind: 'bill-not-found' as const },
+    { kind: 'bill-voided' as const },
+    { kind: 'confirm-void' as const, expenseId: 'e1', description: 'ข้าว', totalSatang: 120000 },
+    { kind: 'bill-void-done' as const, description: 'ข้าว', totalSatang: 120000 },
+    { kind: 'bill-void-not-allowed' as const },
+    { kind: 'bill-void-needs-identity' as const },
+    { kind: 'not-available' as const, what: 'command' as const },
+  ]
+
+  it.each(['group', 'direct'] as const)('ใน %s', (surface) => {
+    for (const plan of PLANS) {
+      for (const message of renderReply(plan, surface)) {
+        // `D` ตามด้วยตัวเลข เช่น `D11` `D26` · `ADR 0002` ก็ไม่ควรหลุดเหมือนกัน
+        expect(message.text).not.toMatch(/\bD\d+\b/)
+        expect(message.text).not.toContain('ADR ')
+      }
+    }
+  })
+})
+
+/**
+ * ยกเลิกบิล (D61) — คำตอบของแต่ละเหตุต้องบอกทางออกคนละทาง
+ */
+describe('renderReply — ยกเลิกบิล (D61)', () => {
+  it('คำถามจังหวะแรกถือ postback ของจังหวะสอง', () => {
+    const [message] = renderReply(
+      { kind: 'confirm-void', expenseId: 'e1', description: 'ข้าว', totalSatang: 120000 },
+      'group',
+    )
+    expect(message?.text).toContain('ข้าว')
+    expect(message?.text).toContain('฿1,200')
+    expect(message?.quickReply?.items[0]?.action.data).toBe('void=e1&yes=1')
+  })
+
+  it('ประกาศตอนยกเลิกสำเร็จบอกชื่อกับยอด — audit อยู่ในสายตาคนทั้งวง', () => {
+    const [message] = renderReply(
+      { kind: 'bill-void-done', description: 'ข้าว', totalSatang: 120000 },
+      'group',
+    )
+    expect(message?.text).toContain('ยกเลิกแล้ว')
+    expect(message?.text).toContain('ข้าว')
+    expect(message?.text).toContain('฿1,200')
+  })
+
+  it('คนที่ไม่มีสิทธิ์ได้คำตอบ ไม่ใช่ความเงียบ', () => {
+    const [message] = renderReply({ kind: 'bill-void-not-allowed' }, 'group')
+    expect(message?.text).toContain('คนจด')
+    expect(message?.text).toContain('คนจ่าย')
+  })
+
+  it('คนที่ยังไม่ยืนยันตัวตนได้ทางออก ไม่ใช่แค่คำปฏิเสธ', () => {
+    const [message] = renderReply({ kind: 'bill-void-needs-identity' }, 'group')
+    expect(message?.text).toContain('ยังไม่รู้ว่าคุณเป็นใคร')
+    expect(message?.text).toContain('ยืนยัน')
+  })
+})

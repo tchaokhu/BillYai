@@ -15,7 +15,7 @@ import { liffUrlOf } from '@/lib/liff/echo'
 import { handleLineWebhook } from '@/lib/line/webhook'
 import { confirmDraft } from '@/lib/repo/confirm'
 import { createDraft, findDraftInScope } from '@/lib/repo/drafts'
-import { loadBalance, loadBillDetail, loadBillList, loadGroupView } from '@/lib/repo/views'
+import { loadBalance, loadBillDetail, loadBillList, loadGroupView, voidBill } from '@/lib/repo/views'
 
 /**
  * ยังต้องเป็น node runtime — เส้นทางนี้ต่อ Postgres ด้วย `pg` และ `lib/line/flex.ts`
@@ -99,6 +99,19 @@ export async function POST(request: Request): Promise<Response> {
       loadBalance,
       loadBillList,
       loadBillDetail,
+      /**
+       * D61 — ยกเลิกบิล · ด่านสิทธิ์ (D11) กับการสโคปตามวงอยู่ใน `voidBill` ทั้งคู่
+       *
+       * **มีด่าน `canReply` เหมือน `saveDraft`** เพราะเส้นนี้เขียน · ยกเลิกสำเร็จแล้ว
+       * ประกาศไม่ออกคือกรณีที่แย่ที่สุดของฟีเจอร์นี้: ยอดของทุกคนในวงขยับโดยไม่มีใคร
+       * รู้ ทั้งที่ D11 ตั้งให้การประกาศกลับเข้ากลุ่มเป็น audit ตัวเดียวที่มี · โยนก่อน
+       * แตะ DB ทำให้ event นั้นนับเป็น `prepareFailed` แล้วได้ 500 ซึ่งเป็นคำตอบที่ถูก:
+       * ยังไม่มีอะไรถูกเขียน retry หลังตั้ง env จึงกู้ได้ครบ
+       */
+      voidBill: async (input) => {
+        if (!canReply) throw new Error('ไม่มี access token — ยังไม่ยกเลิกบิล')
+        return voidBill(input)
+      },
       /**
        * D58 — วาดการ์ดใบเดิมใหม่หลังคนแก้รายการจากหน้าจอ LIFF
        *

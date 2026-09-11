@@ -60,6 +60,7 @@ describe('buildBillList — รายการบิล (D45)', () => {
 describe('buildBillDetail — บิลใบเดียว', () => {
   it('ส่งรายการรายชิ้นต่อให้การ์ด — ไม่ใช่แค่ยอดรายคน (D51)', () => {
     const view = buildBillDetail({
+      expenseId: '9c1f2a5e-0000-4000-8000-0000000000ab',
       description: 'soul bingsu',
       spentAt: '2026-09-05',
       payerName: 'aek',
@@ -73,6 +74,7 @@ describe('buildBillDetail — บิลใบเดียว', () => {
 
   it('บิลที่ไม่มีรายการได้ลิสต์ว่าง ไม่ใช่ undefined — การ์ดจะได้ไม่ต้องเดา', () => {
     const view = buildBillDetail({
+      expenseId: '9c1f2a5e-0000-4000-8000-0000000000ab',
       description: 'ข้าว',
       spentAt: '2026-09-05',
       payerName: 'aek',
@@ -86,6 +88,7 @@ describe('buildBillDetail — บิลใบเดียว', () => {
   it('ชื่อ วันที่ ยอดรวม และรายคนพร้อมป้ายคนจ่าย', () => {
     expect(
       buildBillDetail({
+        expenseId: '9c1f2a5e-0000-4000-8000-0000000000ab',
         description: 'ตี๋น้อย',
         spentAt: '2026-09-01',
         payerName: 'นัท',
@@ -97,6 +100,7 @@ describe('buildBillDetail — บิลใบเดียว', () => {
         items: [],
       }),
     ).toEqual({
+      expenseId: '9c1f2a5e-0000-4000-8000-0000000000ab',
       description: 'ตี๋น้อย',
       date: '1 ก.ย. 69',
       payerName: 'นัท',
@@ -113,6 +117,7 @@ describe('buildBillDetail — บิลใบเดียว', () => {
   it('ไม่คิดยอดใหม่ — ตัวเลขบนการ์ดต้องเป็นตัวเดียวกับที่ลง ledger', () => {
     // การ์ดที่คำนวณเองจะเริ่มเพี้ยนจาก ledger วันที่สูตรสองฝั่งไม่ตรงกัน (D25)
     const detail = buildBillDetail({
+      expenseId: '9c1f2a5e-0000-4000-8000-0000000000ab',
       description: 'ข้าว',
       spentAt: '2026-08-31',
       payerName: 'นัท',
@@ -133,6 +138,7 @@ describe('buildBillDetail — คนจ่ายที่ไม่ได้ร�
     // ใน `expense_share` เลย · ถ้าการ์ดรู้จักคนจ่ายผ่าน `isPayer` ของแถวอย่างเดียว
     // บิลแบบนี้จะไม่บอกว่าใครออกเงิน ซึ่งทำให้ยอดรายคนอ่านไม่รู้เรื่องทั้งใบ
     const detail = buildBillDetail({
+      expenseId: '9c1f2a5e-0000-4000-8000-0000000000ab',
       description: 'ข้าว',
       spentAt: '2026-09-01',
       payerName: 'นัท',
@@ -148,6 +154,7 @@ describe('buildBillDetail — คนจ่ายที่ไม่ได้ร�
 
   it('ยอดรวมมาจากผลรวมรายคน ไม่ใช่ค่าที่ผู้เรียกส่งมาแยก', () => {
     const detail = buildBillDetail({
+      expenseId: '9c1f2a5e-0000-4000-8000-0000000000ab',
       description: 'ข้าว',
       spentAt: '2026-08-31',
       payerName: 'นัท',
