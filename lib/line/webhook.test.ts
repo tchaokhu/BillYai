@@ -84,6 +84,12 @@ function fakeDb(roster: readonly string[] = [], payerName: string | null = null)
     detailAsked.push(input)
     return 'not-found'
   })
+  /** ทุกคำขอยกเลิกบิล — ใช้ตรวจว่าจังหวะแรกไม่แตะ DB จริง (D61) */
+  const voidAsked: Array<Parameters<LineWebhookDeps['voidBill']>[0]> = []
+  const voidBill = vi.fn<LineWebhookDeps['voidBill']>(async (input) => {
+    voidAsked.push(input)
+    return { kind: 'voided', description: 'ข้าวเย็น', totalSatang: 120000 }
+  })
   /** ทุกคำขอวาดการ์ดใหม่ — ใช้ตรวจว่าวงกับคนขอถูกส่งไปให้ repo จริง (D58) */
   const refreshAsked: Array<Parameters<LineWebhookDeps['refreshDraft']>[0]> = []
   const refreshDraft = vi.fn<LineWebhookDeps['refreshDraft']>(async (input) => {
@@ -97,6 +103,8 @@ function fakeDb(roster: readonly string[] = [], payerName: string | null = null)
     detailAsked,
     refreshAsked,
     refreshDraft,
+    voidAsked,
+    voidBill,
     loadGroupView,
     saveDraft,
     confirmDraft,
@@ -186,6 +194,7 @@ async function run(
       loadBillList: db.loadBillList,
       loadBillDetail: db.loadBillDetail,
       refreshDraft: db.refreshDraft,
+      voidBill: db.voidBill,
       now: fakeClock(),
       ...overrides,
     },
@@ -514,6 +523,7 @@ describe('handleLineWebhook — DB ล่มตอนยังไม่ได้
         loadBalance: async () => 'no-bills' as const,
       loadBillList: async () => 'no-bills' as const,
         refreshDraft: async () => 'not-found' as const,
+        voidBill: async () => ({ kind: 'not-found' as const }),
       loadBillDetail: async () => 'not-found' as const,
         now: fakeClock(),
       },
@@ -538,6 +548,7 @@ describe('handleLineWebhook — DB ล่มตอนยังไม่ได้
         loadBalance: async () => 'no-bills' as const,
       loadBillList: async () => 'no-bills' as const,
         refreshDraft: async () => 'not-found' as const,
+        voidBill: async () => ({ kind: 'not-found' as const }),
       loadBillDetail: async () => 'not-found' as const,
         now: fakeClock(),
       },
@@ -564,6 +575,7 @@ describe('handleLineWebhook — DB ล่มตอนยังไม่ได้
         loadBalance: async () => 'no-bills' as const,
       loadBillList: async () => 'no-bills' as const,
         refreshDraft: async () => 'not-found' as const,
+        voidBill: async () => ({ kind: 'not-found' as const }),
       loadBillDetail: async () => 'not-found' as const,
         now: fakeClock(),
       },
@@ -591,6 +603,7 @@ describe('handleLineWebhook — DB ล่มตอนยังไม่ได้
         loadBalance: async () => 'no-bills' as const,
       loadBillList: async () => 'no-bills' as const,
         refreshDraft: async () => 'not-found' as const,
+        voidBill: async () => ({ kind: 'not-found' as const }),
       loadBillDetail: async () => 'not-found' as const,
         now: fakeClock(),
       },
@@ -852,6 +865,7 @@ describe('handleLineWebhook — `บิล` (M8 / D45)', () => {
 
 describe('handleLineWebhook — กดแถวในรายการบิล', () => {
   const DETAIL = {
+    expenseId: '9c1f2a5e-0000-4000-8000-0000000000ab',
     description: 'ตี๋น้อย',
     spentAt: '2026-09-01',
     payerName: 'นัท',
@@ -1132,5 +1146,131 @@ describe('handleLineWebhook — `no-bills-for-tag` ที่มาโดยไ�
     const text = firstText(fake.calls[0]?.messages ?? []) ?? ''
     expect(text).not.toContain('ติด #')
     expect(text).toContain('บิลใหญ่ช่วยจด')
+  })
+})
+
+/**
+ * ยกเลิกบิล (D61) — **สองจังหวะ** เพราะการ์ดรายละเอียดลอยอยู่ในแชทตลอดกาล
+ *
+ * `void=<id>` คือการถาม · `void=<id>&yes=1` คือการลงมือ · กดพลาดจังหวะเดียวแล้ว
+ * ยอดขยับทั้งวงคือสิ่งที่จังหวะที่สองมีไว้กัน
+ */
+describe('handleLineWebhook — ยกเลิกบิล (D61)', () => {
+  const EXPENSE_ID = '9c1f2a5e-0000-4000-8000-0000000000ab'
+
+  /** บิลที่ `loadBillDetail` จะคืนให้จังหวะแรก — คำถามต้องมีชื่อกับยอดของใบนี้ */
+  const BILL = {
+    expenseId: EXPENSE_ID,
+    description: 'ตี๋น้อย',
+    spentAt: '2026-09-01',
+    payerName: 'นัท',
+    lines: [
+      { name: 'นัท', amountSatang: 30000, isPayer: true },
+      { name: 'เดียร์', amountSatang: 60000, isPayer: false },
+    ],
+    items: [],
+  } as const
+
+  it('จังหวะแรกถามก่อน ไม่แตะ DB', async () => {
+    const { calls, voidAsked } = await run([postback(`void=${EXPENSE_ID}`)], undefined, [], {
+      loadBillDetail: async () => BILL,
+    })
+    expect(voidAsked).toHaveLength(0)
+    const text = firstText(calls[0]?.messages ?? []) ?? ''
+    expect(text).toContain('ยกเลิก')
+    expect(JSON.stringify(calls[0]?.messages)).toContain(`void=${EXPENSE_ID}&yes=1`)
+  })
+
+  it('จังหวะแรกบอกชื่อกับยอดของบิล — คนกดต้องรู้ว่ากำลังจะทิ้งใบไหน', async () => {
+    const { calls } = await run([postback(`void=${EXPENSE_ID}`)], undefined, [], {
+      loadBillDetail: async () => BILL,
+    })
+    const text = firstText(calls[0]?.messages ?? []) ?? ''
+    expect(text).toContain('ตี๋น้อย')
+    expect(text).toContain('฿900')
+  })
+
+  it('จังหวะแรกที่หาบิลไม่เจอ บอกตรงๆ ไม่ถามต่อ', async () => {
+    const { calls } = await run([postback(`void=${EXPENSE_ID}`)], undefined, [], {
+      loadBillDetail: async () => 'not-found',
+    })
+    expect(firstText(calls[0]?.messages ?? [])).toContain('หาบิลใบนี้ไม่เจอ')
+  })
+
+  it('จังหวะแรกของบิลที่ยกเลิกไปแล้ว บอกว่าถูกยกเลิกแล้ว', async () => {
+    const { calls } = await run([postback(`void=${EXPENSE_ID}`)], undefined, [], {
+      loadBillDetail: async () => 'voided',
+    })
+    expect(firstText(calls[0]?.messages ?? [])).toContain('ถูกยกเลิกไปแล้ว')
+  })
+
+  it('จังหวะสองยกเลิกจริง แล้วประกาศกลับเข้ากลุ่ม (D11)', async () => {
+    const { calls, voidAsked } = await run([postback(`void=${EXPENSE_ID}&yes=1`)])
+    expect(voidAsked).toEqual([
+      { expenseId: EXPENSE_ID, lineGroupId: GROUP_ID, lineUserId: USER_ID },
+    ])
+    const text = firstText(calls[0]?.messages ?? []) ?? ''
+    expect(text).toContain('ยกเลิกแล้ว')
+    expect(text).toContain('ข้าวเย็น')
+    expect(text).toContain('฿1,200')
+  })
+
+  it('แชท 1:1 ส่งวงเป็น null', async () => {
+    const event = {
+      type: 'postback',
+      replyToken: 'token-1',
+      timestamp: 1_787_000_000_000,
+      source: { type: 'user', userId: USER_ID },
+      postback: { data: `void=${EXPENSE_ID}&yes=1` },
+    }
+    const { voidAsked } = await run([event])
+    expect(voidAsked[0]?.lineGroupId).toBeNull()
+  })
+
+  it('คนที่ไม่ใช่คนจดและไม่ใช่คนจ่าย ได้คำตอบว่าให้เจ้าของทำ', async () => {
+    const { calls } = await run([postback(`void=${EXPENSE_ID}&yes=1`)], undefined, [], {
+      voidBill: async () => ({ kind: 'not-allowed' as const }),
+    })
+    expect(firstText(calls[0]?.messages ?? [])).toContain('คนจด')
+  })
+
+  it('คนที่ยังไม่เคยยืนยันตัวตนในวง ได้คำตอบที่บอกทางออก', async () => {
+    const { calls } = await run([postback(`void=${EXPENSE_ID}&yes=1`)], undefined, [], {
+      voidBill: async () => ({ kind: 'needs-identity' as const }),
+    })
+    expect(firstText(calls[0]?.messages ?? [])).toContain('ยังไม่รู้ว่าคุณเป็นใคร')
+  })
+
+  it('กดยืนยันยกเลิกซ้ำ บอกว่าถูกยกเลิกไปแล้ว ไม่ใช่เงียบ', async () => {
+    const { calls } = await run([postback(`void=${EXPENSE_ID}&yes=1`)], undefined, [], {
+      voidBill: async () => ({ kind: 'already-voided' as const }),
+    })
+    expect(firstText(calls[0]?.messages ?? [])).toContain('ถูกยกเลิกไปแล้ว')
+  })
+
+  it('บิลของวงอื่น ตอบเหมือนหาไม่เจอ — ไม่บอกว่ามันมีอยู่จริงที่อื่น', async () => {
+    const { calls } = await run([postback(`void=${EXPENSE_ID}&yes=1`)], undefined, [], {
+      voidBill: async () => ({ kind: 'not-found' as const }),
+    })
+    expect(firstText(calls[0]?.messages ?? [])).toContain('หาบิลใบนี้ไม่เจอ')
+  })
+
+  it('LINE ไม่บอกว่าใครกด → บอกตรงๆ ไม่แตะ DB', async () => {
+    const event = {
+      type: 'postback',
+      replyToken: 'token-1',
+      timestamp: 1_787_000_000_000,
+      source: { type: 'group', groupId: GROUP_ID },
+      postback: { data: `void=${EXPENSE_ID}&yes=1` },
+    }
+    const { calls, voidAsked } = await run([event])
+    expect(voidAsked).toHaveLength(0)
+    expect(firstText(calls[0]?.messages ?? [])).toContain('ข้อตกลงการใช้งาน')
+  })
+
+  it('`void=` ว่างไม่ใช่คำสั่งของเรา — เงียบ', async () => {
+    const { calls, voidAsked } = await run([postback('void=')])
+    expect(voidAsked).toHaveLength(0)
+    expect(calls).toHaveLength(0)
   })
 })

@@ -14,7 +14,7 @@ import { buildBalance, type BalanceView } from '@/lib/flow/balance'
 import type { BillDetailInput, BillListInput } from '@/lib/flow/bills'
 import type { GroupView } from '@/lib/line/webhook'
 import { findActiveGroupByLineGroupId, findPersonalGroupByOwner } from './groups'
-import { countExpenses, findExpenseById, listExpenses } from './expenses'
+import { countExpenses, findExpenseById, listExpenses, voidExpense } from './expenses'
 import { loadExpensesByTag, loadLedger } from './ledger'
 import { findMemberByLineUserId, listMembers } from './members'
 import { findAppUserByLineUserId } from './users'
@@ -239,6 +239,7 @@ export async function loadBillDetail(input: {
   }))
 
   return {
+    expenseId: detail.expense.id,
     description: detail.expense.description,
     spentAt: detail.expense.spentAt,
     /**
@@ -251,5 +252,80 @@ export async function loadBillDetail(input: {
     payerName: names.get(detail.expense.payerMemberId) ?? UNKNOWN_NAME,
     lines,
     items,
+  }
+}
+
+/**
+ * ผลของการยกเลิกบิล (D61) — เหตุผลแยกละเอียดกว่าที่ชั้นข้อความต้องใช้ **โดยตั้งใจ**
+ *
+ * `not-found` กับ `not-allowed` ต้องแยกกันที่นี่ ถึงชั้นบนจะตอบคล้ายกัน — วันหนึ่ง
+ * ที่ต้องเปลี่ยนคำตอบข้อใดข้อหนึ่ง ตรรกะจะไม่ต้องถูกรื้อตาม
+ */
+export type VoidBillResult =
+  | { kind: 'voided'; description: string; totalSatang: number }
+  /** ไม่มีบิลใบนี้ หรืออยู่คนละวง — **ตอบเหมือนกันทั้งสองกรณี** (เกณฑ์เดียวกับ D45) */
+  | { kind: 'not-found' }
+  | { kind: 'already-voided' }
+  /** claim ตัวตนแล้ว แต่ไม่ใช่คนจดและไม่ใช่คนจ่ายของบิลใบนั้น */
+  | { kind: 'not-allowed' }
+  /** ยังไม่เคยยืนยันตัวตนในวงนี้ — แปลง `line_user_id` เป็น Member ไม่ได้ (ADR 0002) */
+  | { kind: 'needs-identity' }
+
+export interface VoidBillInput {
+  expenseId: string
+  /** `null` = แชท 1:1 */
+  lineGroupId: string | null
+  lineUserId: string
+}
+
+/**
+ * ยกเลิกบิลหนึ่งใบ (D61) — **มาร์ก `status` ไม่ลบแถว**
+ *
+ * `computeDebts` ข้ามบิลที่ `voided` ให้เอง และ `listExpenses`/`countExpenses` กรอง
+ * `status = 'active'` อยู่แล้ว ยอดกับรายการจึงขยับเองทั้งคู่โดยไม่ต้องแตะ
+ *
+ * **สิทธิ์ตาม D11: คนจด หรือคนจ่าย** — ปุ่มบนการ์ดรายละเอียดกดได้ทุกคนเพราะการ์ด
+ * ลอยอยู่ในกลุ่มให้ทุกคนเห็น (เกณฑ์เดียวกับ D56) ด่านจึงต้องอยู่ที่นี่ ไม่ใช่ที่ปุ่ม ·
+ * audit ของ D11 คือข้อความที่บอทประกาศกลับเข้ากลุ่ม ซึ่งเป็นเหตุผลที่ฟังก์ชันนี้คืน
+ * ชื่อกับยอดมาด้วย ไม่ใช่คืนแค่ว่าสำเร็จ
+ */
+export async function voidBill(input: VoidBillInput): Promise<VoidBillResult> {
+  const group = await resolveGroup(input.lineGroupId, input.lineUserId)
+  if (group === null) return { kind: 'not-found' }
+
+  // `findExpenseById` ปฏิเสธ id ที่ไม่ใช่ uuid ให้แล้ว — ค่าจาก postback ปลอมได้
+  const detail = await findExpenseById(input.expenseId)
+  if (detail === null || detail.expense.groupId !== group.id) return { kind: 'not-found' }
+  if (detail.expense.status === 'voided') return { kind: 'already-voided' }
+
+  /**
+   * **ตรวจตัวตนหลังตรวจว่าบิลมีอยู่จริง** — คนที่ยังไม่ claim แล้วกดบิลของวงอื่น
+   * ต้องได้ `not-found` ไม่ใช่ `needs-identity` ซึ่งจะยืนยันว่าบิลใบนั้นมีอยู่
+   */
+  const member = await findMemberByLineUserId(group.id, input.lineUserId)
+  if (member === null) return { kind: 'needs-identity' }
+
+  const allowed =
+    member.id === detail.expense.createdBy || member.id === detail.expense.payerMemberId
+  if (!allowed) return { kind: 'not-allowed' }
+
+  /**
+   * สองคนกดพร้อมกันแพ้กันที่ `where status = 'active'` ใน `voidExpense` ซึ่งโยนเมื่อ
+   * แพ้ · อ่านสถานะซ้ำแทนการเดาจากข้อความ error — คนแพ้ต้องได้คำตอบว่ายกเลิกไปแล้ว
+   * ไม่ใช่ 500
+   */
+  try {
+    await voidExpense(input.expenseId)
+  } catch (error) {
+    const again = await findExpenseById(input.expenseId)
+    if (again?.expense.status === 'voided') return { kind: 'already-voided' }
+    throw error
+  }
+
+  return {
+    kind: 'voided',
+    description: detail.expense.description,
+    // ยอดที่ประกาศต้องเป็นยอดเดียวกับที่การ์ดโชว์ — `addAdjustment` ตัวเดียวกับ ledger
+    totalSatang: addAdjustment(detail.expense.totalSatang, detail.expense.adjustmentSatang),
   }
 }
